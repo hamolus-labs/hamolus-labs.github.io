@@ -1,7 +1,7 @@
 # Hamolus Documentation
 
-Documentation site for [Hamolus](https://github.com/hamolus) — a headless
-data platform on Cloudflare Workers.
+Documentation site for [Hamolus](https://github.com/hamolus-labs/hamolus) — a
+headless data platform on Cloudflare Workers.
 
 Built with [Astro](https://astro.build) + [Starlight](https://starlight.astro.build)
 + [Tailwind CSS v4](https://tailwindcss.com). Deployed to GitHub Pages at
@@ -40,7 +40,7 @@ clobbering Starlight's base styles.
 - Canonical URLs + sitemap (`@astrojs/sitemap` → `/sitemap-index.xml`)
 - `robots.txt` pointing at the sitemap
 - Open Graph / Twitter card meta (custom `Head.astro`)
-- JSON-LD (`WebSite` + `SoftwareApplication` + `TechArticle`)
+- JSON-LD (`WebSite` + `SoftwareApplication` + `WebPage`)
 - Per-page `description` frontmatter → `<meta name="description">`
 
 ## Deploy
