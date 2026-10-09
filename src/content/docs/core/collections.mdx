@@ -1,0 +1,150 @@
+---
+title: Collections
+description: Collection definitions — how Hamolus creates tables from metadata.
+---
+
+A **collection definition** is the schema of one table. It is metadata: a JSON
+object (or TypeScript literal) describing fields, keys and behaviour. The core
+turns it into a D1 table plus a CRUD API.
+
+There is no `defineCollection()` helper required — a plain object literal
+satisfying the schema is enough. Over HTTP the same object is the
+`PUT /api/_meta/collections/{name}` body; the two are interchangeable.
+
+## Shape
+
+```jsonc
+{
+  "name": "posts",
+  "label": "Posts",
+  "description": "Blog posts",
+  "group": "content_blog",
+  "icon": "file",
+  "timestamps": true,
+  "softDelete": false,
+  "primaryKey": "id",
+  "fields": [
+    { "name": "title", "type": "string", "label": "Title", "required": true },
+    { "name": "slug", "type": "slug", "label": "Slug", "required": true, "unique": true },
+    { "name": "published", "type": "boolean", "label": "Published", "default": false }
+  ]
+}
+```
+
+| Property | Type | Notes |
+| -------- | ---- | ----- |
+| `name` | `string` | Table name. Must match `^[a-z][a-z0-9_]*$` (snake_case). |
+| `label` | `string` | Human label for console nav and tables. |
+| `description` | `string` | Optional. |
+| `group` | `string` | Optional registered group id (see `/ _meta/groups`). |
+| `icon` | `string` | Console sidebar icon name (`file`, `users`, `tag`, …). |
+| `timestamps` | `boolean` | Adds `created_at` / `updated_at`. |
+| `softDelete` | `boolean` | Adds `deleted_at`; deletes become soft. |
+| `primaryKey` | `string` | Defaults to `id`. |
+| `fields` | `FieldDefinition[]` | See [Field Definition](/fields/). |
+
+For how a definition shows up and is managed in the admin console — the
+Collections screen, editor bottom sheet, sidebar icons and group tree — see
+[Collection Definition — In the Admin Console](/core/collections/console/).
+
+## Authoring in code
+
+```ts
+import type { CollectionDefinitionInput } from '@hamolus/types'
+
+export const POSTS = {
+  name: 'posts',
+  label: 'Posts',
+  primaryKey: 'id',
+  fields: [
+    { name: 'title', type: 'string', label: 'Title', required: true },
+    { name: 'slug', type: 'slug', label: 'Slug', unique: true, required: true },
+    { name: 'published', type: 'boolean', label: 'Published', default: false },
+  ],
+} satisfies CollectionDefinitionInput
+```
+
+Register with the core entry via `setCodeDefinitions({ collections: [POSTS] })`.
+Code-defined collections are frozen at runtime (see
+[Core](/core/#code-defined-definitions)).
+
+## Endpoints
+
+| Method | Endpoint | Permission |
+| ------ | -------- | ---------- |
+| GET | `/api/_meta/collections` | `collections.read` |
+| GET | `/api/_meta/collections/{name}` | `collections.read` |
+| PUT | `/api/_meta/collections/{name}` | `collections.write` |
+| DELETE | `/api/_meta/collections/{name}` | `collections.write` |
+
+### PUT migrates — never drops
+
+`PUT` is idempotent and **migrates**: newly added fields are
+`ALTER TABLE … ADD COLUMN`-ed onto the existing physical table (based on
+`PRAGMA table_info`). It never drops, renames or retypes columns.
+
+`DELETE` physically drops the table — be careful.
+
+## Navigation groups
+
+Self-parenting registry that arranges collections into a deep nav tree
+(`Content → Blog / Docs / Showcase`):
+
+```
+GET    /api/_meta/groups
+PUT    /api/_meta/groups/{id}
+DELETE /api/_meta/groups/{id}
+```
+
+```jsonc
+{
+  "id": "content_blog",
+  "label": "Blog",
+  "parent": "content",
+  "icon": "file"
+}
+```
+
+Unknown `collection.group` values still render as implicit root groups in the
+console (label = the raw value).
+
+## Record CRUD
+
+Once a collection exists, records are served under the dynamic routes:
+
+```
+GET    /api/:collection
+GET    /api/:collection/:id
+POST   /api/:collection
+PUT    /api/:collection/:id
+PATCH  /api/:collection/:id
+DELETE /api/:collection/:id
+POST   /api/:collection/__bulk_delete
+GET    /api/:collection/__lastUpdate
+```
+
+- `search` on list endpoints is **strict** — a typo returns an error, it is not
+  silently ignored.
+- `bulk_delete` accepts at most 200 ids.
+- List endpoints return `meta.page`, `meta.pageSize`, `meta.total`,
+  `meta.totalPages`.
+
+## Primary key
+
+`primaryKey` defaults to `id`. The core creates the column whether or not you
+declare an `id` field — a normal collection does **not** list one:
+
+```ts
+{ name: 'posts', label: 'Posts', primaryKey: 'id', fields: [ /* no id field */ ] }
+```
+
+Panel views may still list `id` under `fields.read`; the core synthesizes it.
+
+## Best practices
+
+1. Use snake_case names everywhere (`category_id`, not `categoryId`).
+2. Give every human-facing field a `label`.
+3. Prefer `default` over `required` when a value always has a sensible fallback —
+   a field with a default is never a write-time obligation.
+4. Keep `hidden: true` for fields that should never appear in API output.
+5. Group related fields with `group` / `groupOpen` for cleaner console forms.

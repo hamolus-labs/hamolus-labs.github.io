@@ -1,0 +1,187 @@
+---
+title: Field Parameters
+description: Every FieldDefinition property — type, default, validation, DDL effect and console effect.
+---
+
+Complete parameter reference for `fieldDefinitionSchema`
+(`packages/types/src/field.ts`). Schema is `.strict()`: an unknown key is a
+validation error.
+
+## Identity
+
+| Property | Type | Required | Default | Notes |
+| -------- | ---- | -------- | ------- | ----- |
+| `name` | `string` | ✅ | — | `^[a-z][a-z0-9_]*$`. Becomes the SQL column name (quoted identifier). **Cannot be renamed in place** — `PUT` only adds columns. |
+| `type` | `FieldType` | ✅ | — | One of the 19 types. Determines SQL column class, value validator and default console widget. |
+| `label` | `string` | | title-cased `name` | Human label in console forms, tables and panel field pickers. |
+
+## Constraints
+
+| Property | Type | Default | Applies to | DDL / validator effect |
+| -------- | ---- | ------- | ---------- | ---------------------- |
+| `required` | `boolean` | `false` | all | `NOT NULL` when true **and** no `default`. See [required vs defaulted](#required-vs-defaulted). |
+| `unique` | `boolean` | `false` | all | `UNIQUE` column constraint. |
+| `indexed` | `boolean` | `false` | all | **Metadata only** — no `CREATE INDEX` today. |
+| `default` | `unknown` | — | all | Rendered into column `DEFAULT`. Objects stored as JSON text. Also makes `required` optional at write time. |
+| `minLength` | `number` | — | `string`, `text`, `slug`, `email`, `url` | `int ≥ 0`. |
+| `maxLength` | `number` | — | same as above | `int > 0`. |
+| `min` | `number` | — | `number`, `currency`, `custom_currency` | Lower bound. |
+| `max` | `number` | — | same as above | Upper bound. |
+
+## Type-specific
+
+| Property | Type | Required when | Notes |
+| -------- | ---- | ------------- | ----- |
+| `enumValues` | `string[]` | `type: 'enum'` | Non-empty array. With `control: 'multichecklist'` the stored value is a JSON array of these strings. |
+| `relation` | `RelationConfig` | `type: 'relation'` | `{ collection, field, onDelete?, kind? }` — see [Relations](#relationconfig). |
+| `format` | `'lexical' \| 'markdown' \| 'mdx'` | `type: 'richtext'` | Default `lexical`. **Invalid on any other type** (PUT → 400). |
+| `currency` | `string` | `type: 'currency'` | ISO 4217-shaped `^[A-Z]{3}$`. Default `IDR`. Not validated against the real ISO table. |
+| `customCurrency` | `CustomCurrencyConfig` | `type: 'custom_currency'` | Presentation block. **Invalid on any other type.** |
+
+### `RelationConfig`
+
+| Key | Type | Required | Notes |
+| --- | ---- | -------- | ----- |
+| `collection` | `string` | ✅ | Target collection name. |
+| `field` | `string` | ✅ | Target field — usually the PK (`id`). |
+| `onDelete` | `'cascade' \| 'restrict' \| 'setNull'` | | **Metadata only** — not enforced by D1. |
+| `kind` | `'belongsTo' \| 'hasMany' \| 'hasOne'` | | Default `belongsTo`. |
+
+| `kind` | Stored value | Meaning |
+| ------ | ------------ | ------- |
+| `belongsTo` | `string` | FK on this table → `posts.category_id → categories.id` |
+| `hasMany` | `string[]` | Array of target keys on this table |
+| `hasOne` | `string` | Reverse lookup — target references this record |
+
+### `CustomCurrencyConfig`
+
+All keys optional — the block itself is the unit:
+
+| Key | Type | Default | Notes |
+| --- | ---- | ------- | ----- |
+| `symbol` | `string` (max 3) | — | Shown next to amount |
+| `position` | `'before' \| 'after'` | `before` | Symbol side |
+| `prefix` | `string` (max 12) | — | Before everything |
+| `suffix` | `string` (max 12) | — | After everything (`/bulan`) |
+| `space` | `boolean` | inferred | Force/suppress space after symbol |
+| `decimals` | `int 0–8` | `2` | Fraction digits |
+| `grouping` | `boolean` | `true` | Thousands separators |
+| `decimalSeparator` | `string` (max 3) | from locale | e.g. `,` |
+| `thousandSeparator` | `string` (max 3) | from locale | e.g. `.` |
+| `negativePattern` | `string` | `—` | Must contain `{amount}`; may use `{symbol}` |
+
+Render order is fixed: `prefix` → symbol → amount → `suffix`.
+
+## Console presentation
+
+These never change storage or validation — only how the admin UI lays out and
+edits the field.
+
+| Property | Type | Default | Effect in admin panel |
+| -------- | ---- | ------- | ---------------------- |
+| `control` | `ControlType` | per type | Input widget on the **record form**. Only valid on `boolean`, `enum`, `relation`. |
+| `consoleView` | `'normal' \| 'side' \| 'header' \| 'footer'` | `normal` | Which **slot** of the record form the field lands in. |
+| `group` | `string` | — | Fields sharing a `group` render inside one collapsible section. |
+| `groupOpen` | `boolean` | `true` | Whether that section starts expanded. |
+| `hidden` | `boolean` | `false` | Removed from API output **and** from the record form. Cannot be referenced by panel ACLs. |
+| `localized` | `boolean` | `false` | Value becomes `{ [locale]: string }`. Console shows a language tab strip. Honoured only by 6 types. |
+
+### Allowed `control` values
+
+| Field | Allowed controls | Default widget when unset |
+| ----- | ---------------- | ------------------------- |
+| `boolean` | `toggle`, `radio` | checkbox |
+| `enum` | `combobox`, `search`, `radio`, `checklist`, `multichecklist` | native `<select>` |
+| `relation` `hasMany` | `search`, `multichecklist` | tag-style chips |
+| `relation` other kinds | `combobox`, `search`, `radio`, `checklist` | chips (display) / select-like |
+| any other type | *(must be absent)* | type default |
+
+| `control` | Widget appearance |
+| --------- | ----------------- |
+| `combobox` | Native `<select>` — "— pick one —" placeholder |
+| `search` | Searchable list — type to filter many options |
+| `radio` | Inline radio group (small sets) |
+| `toggle` | Switch (boolean only) |
+| `checklist` | Pick **one** from rows |
+| `multichecklist` | Pick **many** with checkboxes; value is a JSON array |
+
+When you change a field's `type` in the FieldEditor, the console **clears**
+`control` / `format` / `currency` / `customCurrency` keys that are no longer
+valid — and the PUT would reject them anyway.
+
+### `consoleView` slots
+
+The record form is a two-column layout (main card + side rail). Fields are
+bucketed by `consoleView ?? 'normal'`:
+
+| Slot | Where it renders | Typical use |
+| ---- | ---------------- | ----------- |
+| `header` | Top of the form, above the main body, with an inset bottom border | Title, name — always visible |
+| `normal` | Main column of the form | Body fields, most inputs |
+| `footer` | Bottom of the form, inset top border | Tags, misc metadata |
+| `side` | Right sidebar rail (stacks under main on narrow screens) | Notes, flags, secondary data |
+
+On screens ≤900px the sidebar becomes full-width under the main card.
+
+## Required vs defaulted
+
+`required` has **two meanings** and they do not always agree:
+
+| Declaration | DDL | Record write |
+| ----------- | --- | ------------ |
+| `required: true`, no `default` | `NOT NULL` | **Mandatory** |
+| `required: true` **with** `default` | `NOT NULL DEFAULT …` | **Optional** — validator allows omission |
+| `required` unset | nullable | Optional |
+
+The validator computes write-time obligation as:
+
+```
+field.required === true && field.default === undefined
+```
+
+This is what lets `published: boolean` default to `false` without every create
+payload spelling it out.
+
+## Localization rules
+
+`localized: true` stores:
+
+```jsonc
+{ "en": "Hello world", "id": "Halo dunia" }
+```
+
+| Rule | Detail |
+| ---- | ------ |
+| Honoured types | `text`, `string`, `slug`, `email`, `url`, `richtext` only |
+| Other types | Flag stored but **inert** |
+| Locale list | From `core.config.ts` / KV settings — not from the field |
+| Read without `?locale=` | Full `{ locale: value }` object |
+| Read with `?locale=id` | Resolved string for that locale |
+| Project with no locales | `localized: true` accepts a **plain string** |
+
+## Read behaviour
+
+- `hidden: true` → field absent from list/detail responses and panel field ACLs
+- `search` on list endpoints covers non-hidden `string`, `text`, `email`, `url`,
+  `slug`, `richtext`
+- Primary key always present in responses, even if not declared as a field
+- `enum` + `multichecklist` is excluded from table column-filter options
+
+## Validation checklist
+
+- [ ] `name` snake_case and unique within the collection
+- [ ] `enum` has non-empty `enumValues`
+- [ ] `relation` has `collection` + `field`
+- [ ] `format` only on `richtext`
+- [ ] `currency` only on `currency`; `customCurrency` only on `custom_currency`
+- [ ] `localized` only on the six honouring types
+- [ ] `control` allowed for that type
+- [ ] `minLength`/`maxLength` only on string-like; `min`/`max` only on numeric-like
+- [ ] `default` matches the type's value shape
+- [ ] No unknown keys (schema is strict)
+
+## See also
+
+- [Field Types](/fields/types/) — type-by-type reference
+- [In the Admin Console](/fields/console/) — FieldEditor + RecordForm
+- [Collections](/concepts/collections/) — the parent concept

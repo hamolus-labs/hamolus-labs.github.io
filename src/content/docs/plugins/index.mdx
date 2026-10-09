@@ -1,0 +1,122 @@
+---
+title: Plugins
+description: Console plugins, plugin KV storage and the plugin contract.
+---
+
+Hamolus has **two plugin surfaces**:
+
+1. **Console plugins** — additional SolidJS pages registered in the admin sidebar
+2. **Plugin KV in the core** — per-plugin key-value storage in Cloudflare KV
+
+## Console plugins
+
+### Registration
+
+Plugins are listed **only** in `console.config.ts` — never in a registry file.
+The console is a Vite bundle; your project never owns its source.
+
+```bash
+hamolus add plugin todo
+```
+
+This adds one import and one array element:
+
+```ts
+// console.config.ts
+import { defineConsoleConfig } from '@hamolus/types'
+import { todoPlugin } from '@hamolus/plugin-console-todo'
+
+export const config = defineConsoleConfig({ plugins: [todoPlugin] })
+export default config
+```
+
+### Contract
+
+```ts
+interface ConsolePlugin {
+  id: string           // snake_case, unique
+  name: string
+  description: string
+  icon?: string
+  component: Component // Solid component
+}
+
+interface KvClient {
+  list(): Promise<string[]>
+  get<T>(key: string): Promise<T | null>
+  set(key: string, value: unknown): Promise<void>
+  del(key: string): Promise<void>
+}
+
+interface PluginPermissions {
+  canWrite: boolean    // derived from settings.write
+}
+```
+
+The contract package is `@hamolus/plugin-console-contracts`.
+
+### Rules
+
+| Rule | Why |
+| ---- | --- |
+| `id` must be unique (`snake_case`) | Two same ids collide on the KV prefix `plugin:{land}:{plugin}:{key}` — data would swap. Mount throws via `assertUniqueIds()`. |
+| `component` must be callable | Validated at config parse and again at registration. |
+| Plugin list comes from config only | Console is a bundle; there is no runtime file scan. |
+| Contracts file must stay in sync | `packages/console/src/plugins/types.ts` mirrors `packages/plugins/console/contracts/src/index.ts` manually. |
+
+The registry in the console (`src/plugins/registry.ts`) is a SolidJS signal —
+empty until the host mounts plugins from config.
+
+### Bundled examples
+
+| Plugin | Package |
+| ------ | ------- |
+| Todo | `@hamolus/plugin-console-todo` |
+| Kanban | `@hamolus/plugin-console-kanban` |
+| Contracts | `@hamolus/plugin-console-contracts` |
+
+Try them in `examples/consoles/with-plugins/`.
+
+## Plugin KV (core)
+
+Every plugin gets isolated KV storage under the prefix:
+
+```
+plugin:{land}:{plugin}:{key}
+```
+
+### Endpoints
+
+```
+GET    /api/_plugins/:plugin
+GET    /api/_plugins/:plugin/:key
+PUT    /api/_plugins/:plugin/:key
+DELETE /api/_plugins/:plugin/:key
+```
+
+All writes require `settings.write` on the session. Values are stored as JSON.
+
+### Client usage (in a plugin page)
+
+```ts
+const kv = pluginKv // provided to the plugin component
+await kv.set('todos', [{ id: 1, title: 'Ship' }])
+const todos = await kv.get<Todo[]>('todos')
+```
+
+## When to use which
+
+| Need | Use |
+| ---- | --- |
+| New admin UI page | Console plugin |
+| Persist plugin state | Plugin KV |
+| Per-land plugin isolation | KV prefix includes `land` |
+| Ship a plugin to other projects | Publish an npm package exporting a `ConsolePlugin` descriptor |
+
+## Checklist
+
+- [ ] Plugin id is `snake_case` and unique in the project
+- [ ] Plugin registered in `console.config.ts` (not somewhere else)
+- [ ] Writes check `PluginPermissions.canWrite`
+- [ ] KV keys are namespaced by intent (avoid bare keys like `data`)
+- [ ] Contracts package version matches the console's expected contract

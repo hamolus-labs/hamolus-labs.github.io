@@ -1,0 +1,115 @@
+---
+title: Collection Definition — In the Admin Console
+description: The admin-panel view of a collection definition — the Collections screen, the sidebar group tree, collection editor and icons, and how each definition property shows up in the console.
+---
+
+The admin console renders the worlds the collection definition describes. It
+never keeps its own copy — `_meta_collections` on the core is the single source,
+so a definition written in code or over the API appears in the console with no
+extra step. This page is the **admin example of that definition**: what you see,
+and which property drives it.
+
+## The Collections screen (`/collections`)
+
+The landing screen for definitions is a **card grid of every registered
+collection**, grouped into sections by their registered `group` (the tree from
+`/_meta/groups`), ordered as the tree. Collections without a group fall under
+**Other**. Each card shows:
+
+- the collection **icon** (glyph) and **label**,
+- its **record type counts** and **timestamps flag**,
+- a ✎ button that **edits the definition** and a 🗑 that deletes it (both stop
+  the navigation to the records page).
+
+A **＋ New collection** opens the editor as a full-width bottom sheet that rises
+from below with a brief bounce and settles about a third from the top (grab
+handle, backdrop / ✕ / Esc to close). The editor configures the definition's
+own keys:
+
+- `name` (validated `snake_case`), `label`, `group` and **icon**;
+- `timestamps`;
+- the `field` list.
+
+The **group** select is fed by the registered group tree — nested groups appear
+indented (`·`-prefixed) — and typing a group id that is not registered falls
+back to a free-text input; unregistered groups still render as implicit root
+groups in the sidebar. The **icon** picker shows a live preview (accent tile)
+above a swatch grid: a blank "no icon" button plus one swatch per registered
+collection icon.
+
+Fields edit in either of two modes toggled with a **JSON / Form** switch: the
+raw `fields` block as JSON, or an interactive editor — one card per field with a
+type selector, name/label, per-type constraints (min/max, lengths, enum values,
+relation target · kind · onDelete), toggle chips (required/unique/indexed/
+localized/hidden), default, console view, form group, and up/down move +
+remove actions. For `enum`, `relation` and `boolean` fields a **Control**
+picker chooses the record-form widget, scoped to the current field type.
+
+Deleting a collection asks for confirmation first — it physically drops the
+table.
+
+## The sidebar: icons & the group tree
+
+Collections appear in the sidebar as links grouped by their registered
+**group tree**:
+
+- ungrouped collections render flat at the top;
+- groups render as recursive, collapsible sections — label + record count and,
+  when expanded, nested child groups (indented) followed by their direct member
+  links;
+- a group that is not registered renders as an **implicit root group** (label =
+  the raw value), so pre-registry data still works.
+
+Each link leads with its `icon` (SVG glyph) ahead of the label, and shows its
+**record count** on the right, fetched from `GET /api/_meta/stats`. Icons come
+from a registry of **14 names**: `box, file, users, tag, mail, folder, grid,
+list, code, database, star, calendar, zap, heart`. Unknown or empty names fall
+back to a folder glyph, so you never see a broken image.
+
+## Where each definition property shows up
+
+| Definition property | Admin-panel effect |
+| --- | --- |
+| `name` | Routes everything: the record page is `/collections/{name}`; validated `snake_case`. |
+| `label` | The collection card title, the sidebar link text and the record page header. |
+| `group` | The `/collections` grid section and the sidebar group tree; unregistered ids become implicit root groups. |
+| `icon` | The sidebar glyph and the collection card; one of the 14 registered names, folder fallback otherwise. |
+| `timestamps` | The flag on the collection card. |
+| `fields` | Table columns, cell rendering and the record form layout — see [Field Definition — In the Admin Console](/fields/console/). |
+
+`primaryKey`, `softDelete` and `mcp` are **not exposed in the collection
+editor** — they stay code/API-level keys of the definition.
+
+Field-level placement (`consoleView`, `group`, `groupOpen`) and the per-field
+widgets are documented on the
+[same admin view for fields](/fields/console/) — between the two pages you see
+the whole admin surface of a collection definition.
+
+## Records page (`/collections/{name}`)
+
+Clicking a collection card opens its records page:
+
+- a **pin (📌)** button places the collection among the **navbar shortcuts**,
+  next to pinned plugins and panels;
+- the table shows the current page of records, with **per-page** presets
+  (5–100, persisted per collection);
+- **sorting** is server-side: clicking a column header sends
+  `sortBy`/`sortDir` to the core, so it stays correct across all pages;
+- **columns** can be toggled, reordered and resized, and all of it is persisted
+  per collection;
+- when any visible field declares a `group`, the table draws a nested
+  **header row** that merges contiguous columns of the same group into one
+  spanning label;
+- a **Group by** select regroups the page into collapsible sections (buckets),
+  except for `json`, `richtext`, `media` and `hasMany` fields;
+- cells are **type-aware**: booleans render as Yes/No chips, enums as accent
+  chips, relations as chips with a tooltip of the target collection.
+
+**New record** opens the create form as the same bottom sheet pattern. The form
+is field-driven — each field renders the widget its `control` and `type`
+choose, `consoleView` places it (`normal` main column, `side` actions column,
+`header`, `footer`), and fields sharing a `group` render inside a collapsible
+section (`groupOpen: false` starts it collapsed).
+
+See [Collections API](/core/collections/) for the definition itself and
+[Console](/console/) for the whole admin app.

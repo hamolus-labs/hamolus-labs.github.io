@@ -1,0 +1,219 @@
+---
+title: MCP
+description: Model Context Protocol server for AI agents — console-managed instances, tokens and tools.
+---
+
+`@hamolus/mcp` is a Cloudflare Worker that exposes Hamolus data and operations
+to AI agents over the [Model Context Protocol](https://modelcontextprotocol.io).
+
+Since **0.2.10** the model is **console-managed**: a deployed MCP worker needs
+exactly two things to talk to a core — the core's API URL and an **instance id**.
+Everything else (tools, write access, colony, who may call it) lives in the core
+and is configured from the console.
+
+## Where each piece lives
+
+| Concern | Configured in |
+| ------- | ------------- |
+| Which core | `CORE_API_URL` (worker var) |
+| Which instance | `MCP_INSTANCE_ID` (worker var — credential issued by console) |
+| Which colony it serves | the instance, in the core |
+| Enabled / read-only | the instance, in the core (effective in ~1 min, no redeploy) |
+| Tool groups, dynamic tools, cap | the instance, in the core |
+| Who may see or change any of it | `mcp.read` / `mcp.write` on a console role |
+| Who may call this server | per-user token, issued in the console, revocable |
+
+Console surface: **Environment → MCP**.
+
+## Three parties, three credentials
+
+```
+console ──(session JWT, mcp.write)──▶ core ──▶ _mcp_instances / _mcp_tokens
+                                          ▲
+                                          │  POST /_mcp/session  { token }
+                                          │  GET  /_mcp/config
+                                   MCP worker
+                                          │
+                                   AI client ──(per-user token)──▶ POST /mcp
+```
+
+| Party | Credential | Where it lives |
+| ----- | ---------- | -------------- |
+| Operator | console session JWT | browser, 24 h |
+| MCP worker | instance id (`mcp_` + 26 base62 chars) | `wrangler.jsonc` var |
+| AI client | per-user token (`mcp_<id>_<secret>`) | issued in console; secret only hashed (SHA-256) |
+
+The instance id **is** the worker's credential — high-entropy, per deployment,
+rotatable by re-issuing. It can only read a tool-surface description; it cannot
+mint a session on its own.
+
+The per-user token carries identity. The core exchanges it for a **short-lived,
+permission-scoped, land/colony-pinned JWT**. Read-only and tool-group decisions
+are enforced by the core's `requireRead`/`requireWrite`, not by the worker's
+good behaviour.
+
+## Why not `CORE_ADMIN_KEY`
+
+The legacy path handed the MCP worker the platform-wide admin key:
+
+- every land and colony readable and writable, not one
+- user/land/colony creation possible (admin key mints all permissions)
+- revocation = rotating a shared secret across deployments
+- no per-person audit trail
+
+`MCP_READONLY` and `MCP_TOOL_GROUPS` narrowed what the *worker offered* but not
+what the *core accepted*. The console-managed model closes that gap.
+
+Legacy env vars are still honoured and report `mode: "legacy"` until
+`MCP_INSTANCE_ID` is set. Removed in **0.3.0**.
+
+## Data model
+
+### `_mcp_instances`
+
+| Column | Notes |
+| ------ | ----- |
+| `land`, `colony`, `id` | PK `(land, colony, id)` |
+| `label` | Operator-facing name |
+| `enabled` | `0` ⇒ worker gets `403 MCP_DISABLED` |
+| `readonly` | `1` ⇒ no `*.write` permission minted |
+| `tool_groups` | comma-separated: `records,media,meta,admin` or `all` |
+| `dynamic_tools` | `all` or collection list; empty = off |
+| `dynamic_max` | cap on generated tools (default 10) |
+
+### `_mcp_tokens`
+
+| Column | Notes |
+| ------ | ----- |
+| `id` | `tok_` + 12 base62 chars |
+| `land`, `colony` | copied from instance — token cannot outlive its scope |
+| `instance_id` | owning instance |
+| `token_hash` | `sha256(secret)` hex — secret never stored |
+| `permissions` | optional **narrowing** subset |
+| `expires_at` / `revoked_at` / `last_used_at` | lifecycle + audit |
+
+Token string: `mcp_<id>_<secret>`. Lookup is PK hit on `id`, then constant-time
+hash compare. Revocable, expirable, auditable — unlike a stateless JWT.
+
+## Tool groups & permissions
+
+| Group | Read | Write |
+| ----- | ---- | ----- |
+| `records` | `records.read`, `collections.read`, `users.read` | `records.write`, `collections.write`, `users.write` |
+| `media` | `media.read` | `media.write` |
+| `meta` | `settings.read`, `config.read`, `collections.read`, `lands.read`, `colonies.read` | `settings.write`, `config.write`, `collections.write` |
+| `admin` | `users.read`, `collections.read`, `lands.read`, `colonies.read` | `users.write`, `collections.write`, `lands.write`, `colonies.write`, `settings.write` |
+
+- `readonly=true` removes every `*.write`.
+- Token `permissions` intersect with the instance set — **can only narrow**.
+- `admin` group is **off by default**.
+
+## Tools, resources & prompts
+
+42 static tools registered in order `records → media → meta → admin`, filtered by
+`core.toolGroups()`. Duplicate names throw. Result cap: 250,000 characters.
+
+- **records** — collections and records: CRUD, `bulk_delete_records` (max 200),
+  `get_collection_last_update`
+- **media** — assets, uploads (base64 ≤ 10 MB), media taxonomy
+- **meta** — settings, localization, groups, config, plugin values
+- **admin** *(off by default)* — tenants, users, privileges, export/import
+
+Write tools are marked with `Symbol.for('hamolus.mcp.writeTool')` and are
+**never registered** on read-only instances — absent, not offered-then-rejected.
+Every tool also accepts optional `land` / `colony` overrides for multi-scope cores.
+The full list, each group's notes, the 7 prompts and every per-collection `mcp`
+behaviour are in the [server reference](/mcp/reference/). A step-by-step setup runs
+through the [end-to-end example](/mcp/example/).
+
+## Resources & prompts
+
+**13 resources** under `hamolus://…`:
+`spec/collection-definition`, `collections`, `settings`, `localization`,
+`stats`, `lands`, `groups`, `collection/{c}`, `records/{c}` (25 rows),
+`record/{c}/{id}`, `media|document|attachment/{id}`, `group/{id}`, `config/{key}`.
+
+Payloads over 1 MB are **rejected**, not truncated. Resources carry no arguments —
+they always resolve to the instance scope + default locale.
+
+**7 prompts**: `explore_content`, `draft_record`, `bulk_import`,
+`review_collection`, `migrate_records`, `manage_media`, `provision_user`.
+
+Each collection has an `mcp` key controlling what this server may do to it.
+
+## Core API for MCP
+
+### Machine routes (instance id, no session)
+
+Mounted **before** the JWT middleware (the worker does not know its scope yet):
+
+```
+GET  /api/_mcp/config     Authorization: Bearer <instanceId>
+POST /api/_mcp/session    body { token } → short-lived scoped JWT
+```
+
+Status codes are part of the contract:
+`401` credential not accepted · `403` instance disabled · `400` malformed.
+Messages never separate "unknown id" from "revoked token".
+
+Only the worker may write `reported_version` / `last_seen_at` (heartbeat after
+credential acceptance).
+
+### Operator routes (normal JWT)
+
+```
+GET|POST       /api/_mcp/instances
+GET|PUT|DELETE /api/_mcp/instances/:id
+GET|POST       /api/_mcp/instances/:id/tokens
+DELETE         /api/_mcp/tokens/:tokenId
+```
+
+Permissions: `mcp.read` / `mcp.write`.
+
+## Deploy & env
+
+```bash
+hamolus add mcp
+cd mcp
+npx wrangler deploy
+```
+
+| Var | Purpose |
+| --- | ------- |
+| `CORE_API_URL` | Core API base URL |
+| `MCP_INSTANCE_ID` | Instance credential from the console |
+| `HAMOLUS_MCP_PORT` | Dev only (default 8788) |
+
+## Connect a client
+
+1. Console → **Environment → MCP** → create an instance for a colony
+2. Issue a per-user token (copy `mcp_<id>_<secret>` once)
+3. Put the instance id into the **worker** vars — `CORE_API_URL` +
+   `MCP_INSTANCE_ID` in `wrangler.jsonc`, or `mcp/.dev.vars` locally. The client
+   never needs them.
+4. Point the client at the endpoint with the bearer token:
+
+```jsonc
+"mcp": {
+  "Hamolus-local": {
+    "type": "remote",
+    "url": "http://localhost:8788/mcp",
+    "headers": { "Authorization": "Bearer mcp_<id>_<secret>" },
+    "enabled": true
+  }
+}
+```
+
+The header is a per-user token, not a shared secret. Any MCP client that supports a
+remote Streamable HTTP server takes the same URL + bearer pair (for a deployed
+worker, `https://your-name-mcp.<account>.workers.dev/mcp`). A full walkthrough from
+scaffold to deployed worker is in the [end-to-end example](/mcp/example/).
+
+## Gate
+
+```bash
+pnpm check:mcp-instance-acl   # core on :8787
+```
+
+Pins three easy-to-break invariants: machine routes above JWT, token↔instance
+binding, and status-code-only error distinction.

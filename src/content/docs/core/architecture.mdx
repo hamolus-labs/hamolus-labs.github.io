@@ -1,0 +1,136 @@
+---
+title: Architecture
+description: How Hamolus parts fit together — request flow, packages and platform choices.
+---
+
+## Platform stack
+
+| Layer | Technology |
+| ----- | ---------- |
+| Runtime | Cloudflare Workers (`nodejs_compat`) |
+| HTTP framework | Hono 4 |
+| Database | Cloudflare D1 (SQLite) via Drizzle ORM |
+| Key-value | Cloudflare KV (settings blob) |
+| Object storage | Cloudflare R2 |
+| Validation | Zod 4 |
+| Console UI | SolidJS + StyleX + TanStack Query + Lexical |
+| MCP | `@modelcontextprotocol/server` on Workers |
+| Tooling | pnpm workspaces + Turborepo + tsup |
+
+## Package graph
+
+```
+@hamolus/types        Zod schemas & shared domain types
+       ▲
+       │
+@hamolus/core         API Worker (Hono + D1/KV/R2)
+@hamolus/console      Admin SPA (SolidJS)
+@hamolus/panel        Browser client for panel apps
+@hamolus/mcp          MCP server Worker
+@hamolus/cli          Scaffold CLI (bin: hamolus)
+@hamolus/create-hamolus  npx create wrapper
+plugins/console/*     Console plugins (todo, kanban, contracts)
+```
+
+Workspace globs: `packages/*` and `packages/plugins/*/*`. Examples are
+intentionally **outside** the workspace so root `pnpm install` never touches them.
+
+## Request flow
+
+A typical record read:
+
+```
+Client
+  │  GET /api/posts?search=hello  + Authorization: Bearer <jwt>
+  │  optional headers: x-land, x-colony
+  ▼
+Core Worker (Hono)
+  1. cors()
+  2. verify JWT (skip if AUTH_SKIP or PUBLIC_GETS GET)
+  3. applyScope → resolve x-land / x-colony → scope context
+  4. dynamic routes → collection metadata lookup
+  5. Drizzle query with land/colony predicates
+  6. coerce values (fromDbValue) → JSON response
+```
+
+List responses:
+
+```jsonc
+{
+  "data": [ /* records */ ],
+  "meta": { "page": 1, "pageSize": 20, "total": 3, "totalPages": 1 }
+}
+```
+
+Error responses:
+
+```jsonc
+{ "error": { "code": "NOT_FOUND", "message": "..." } }
+```
+
+## Dynamic vs code-defined
+
+| | Runtime-defined | Code-defined |
+| - | --------------- | ------------ |
+| Created via | `PUT /_meta/collections/{name}` or console | `setCodeDefinitions()` in source |
+| Schema change | `PUT` migrates (adds columns only) | Edit source + redeploy |
+| Delete schema | `DELETE` drops the table | Not allowed at runtime (`403`) |
+| Edit records | ✅ | ✅ |
+| Authoritative | Last write wins | Source files win on every deploy |
+
+## Configuration layering
+
+```
+Wrangler vars/secrets  →  core.config.ts  →  KV settings  →  config entries
+(infra)                  (PR-reviewed)       (no deploy)     (no deploy, keyed)
+```
+
+Localization precedence is the only overlap today: **KV settings win outright**.
+
+## Multi-scope model
+
+```
+universe
+  └── land        (tenant / organization)
+        └── colony (sub-unit, optional)
+```
+
+- Headers: `x-land`, `x-colony`
+- PK on most tables: `(land, colony, id)`
+- `CORE_MODE` selects how strictly scope is enforced
+
+See [Multi-tenancy](/core/multi-tenancy/).
+
+## Console & panels
+
+- Console is a **generic** SPA — it reads collection and panel metadata from the
+  core API. Your project only supplies `console.config.ts` and a `mount()` call.
+- Panel apps use `@hamolus/panel`'s `PanelClient` with a user token. Manifests
+  drive views; ACL is enforced over HTTP, not in the UI.
+- Private panel assets are served via `GET /panel-assets/:id?expires=&sig=`
+  (HMAC with `PANEL_ASSET_SECRET`).
+
+## MCP architecture
+
+```
+console ──(session JWT, mcp.write)──▶ core ──▶ _mcp_instances / _mcp_tokens
+                                          ▲
+                                          │  POST /_mcp/session  { token }
+                                          │  GET  /_mcp/config
+                                   MCP worker
+                                          │
+                                   AI client ──(per-user token)──▶ POST /mcp
+```
+
+Three parties, three credentials — see [MCP](/mcp/).
+
+## Deploy model
+
+Scripts in the monorepo export dedicated deploy repositories:
+
+```
+scripts/export-deploy-repo.mjs  →  hamolus-labs/{core,console,mcp}
+```
+
+The deploy repo is a thin consumer of the published packages; drift is checked by
+`export-deploy-repo.mjs --check`.

@@ -1,0 +1,165 @@
+---
+title: Records API
+description: CRUD on any collection — list with filters and pagination, create, update, delete, bulk delete and locale-aware reads.
+---
+
+Every registered collection gets CRUD for free. The routes are mounted last, so
+any collection name (that exists) answers:
+
+```
+GET    /api/:collection/__lastUpdate
+GET    /api/:collection                  ?page=&pageSize=&search=&…
+GET    /api/:collection/:id
+POST   /api/:collection
+PUT    /api/:collection/:id
+PATCH  /api/:collection/:id
+DELETE /api/:collection/:id
+POST   /api/:collection/__bulk_delete    max 200 ids
+```
+
+Base URL locally: `http://localhost:8787/api`. All routes need a JWT except
+when [`PUBLIC_GETS=true`](/getting-started/configuration/) — and even then only
+the `GET` endpoints become public; **writes always need a token**.
+
+## List — `GET /{collection}`
+
+Query params:
+
+| Param | Default | Notes |
+| ----- | ------- | ----- |
+| `page` | `1` | 1-based |
+| `pageSize` | `20` | 1–100 |
+| `sortBy` | — | field name; default sort is `rowid DESC` |
+| `sortDir` | `desc` | `asc` / `desc` |
+| `search` | — | text search across searchable fields |
+| `filter` | — | URL-encoded JSON — see below |
+| `locale` | — | resolves localized fields to one language |
+
+Response:
+
+```jsonc
+{
+  "data": [ /* items */ ],
+  "meta": { "page": 1, "pageSize": 20, "total": 3, "totalPages": 1 }
+}
+```
+
+The core does **not** aggregate — `meta.total`, `meta.totalPages` and
+`lastUpdate` are the only bookkeeping it returns; business aggregation belongs
+in the caller.
+
+### Filters
+
+A `FilterMap` maps field names to `{ op, value }` — multiple columns are
+ANDed:
+
+```jsonc
+{ "published": { "op": "eq", "value": true } }
+```
+
+Operators: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `like`, `in`, `contains`.
+
+```bash
+curl 'http://localhost:8787/api/posts?filter=%7B%22published%22%3A%7B%22op%22%3A%22eq%22%2C%22value%22%3Atrue%7D%7D' \
+  -H 'authorization: Bearer <jwt>'
+# filter = { "published": { "op": "eq", "value": true } }
+```
+
+`search` matches plain-text (`LIKE`) across every non-hidden string-like field
+(`string`, `text`, `email`, `url`, `slug`, `richtext`) — no need to name a
+field. `filter` is strict instead: an unknown field name or an unsupported
+operator is a `400` error, never a silently ignored parameter. Panel views
+whose definition sets `searchable: false` reject `search` entirely with
+`403 PANEL_SEARCH_FORBIDDEN`.
+
+### Locale-aware reads
+
+Reads without `?locale=` return the full localized object:
+
+```jsonc
+{ "en": "Hello world", "id": "Halo dunia" }
+```
+
+With `?locale=id` the field resolves to the string for that language. The
+locale must be one of the project's effective locales
+(`GET /api/_meta/localization`).
+
+### Money fields
+
+Money fields return a display-ready envelope:
+
+```jsonc
+{ "base": 1990000, "currency": "IDR", "display": "Rp 19.900,00" }
+```
+
+`base` is the raw amount in `currency`, so a site can compute with it; the
+separators in `display` follow the requested `?locale=`.
+
+### Incremental sync — `__lastUpdate`
+
+```
+GET /api/:collection/__lastUpdate
+```
+
+Returns the newest `updated_at` for the collection so a frontend can poll or
+sync incrementally instead of re-fetching everything.
+
+## Get — `GET /{collection}/{id}`
+
+`{ "data": { … } }`, or `404` when missing. A private file URL never comes
+back embedded in a record.
+
+## Create — `POST /{collection}`
+
+```bash
+curl -X POST http://localhost:8787/api/posts \
+  -H 'authorization: Bearer <jwt>' -H 'content-type: application/json' \
+  -d '{"title":"Hello","slug":"hello","published":true}'
+```
+
+- The primary key is generated (`crypto.randomUUID()` server-side) unless
+  provided; `id`-type fields can't be set manually through the payload.
+- Extra unknown fields are **rejected** (strict schema) — this is the
+  SQL-injection guard on top of identifier whitelisting.
+- Values validate per field type: `slug` → `/^[a-z0-9]+(?:-[a-z0-9]+)*$/`,
+  `datetime` → ISO-8601, `date` → `YYYY-MM-DD`, `email`/`url` checked, etc. See
+  [Field Types](/fields/types/).
+- A validation failure is `400 VALIDATION_ERROR` with the failing path in the
+  message.
+
+## Update — `PUT /{collection}/{id}`
+
+Partial update — only provided fields change; `updated_at` is refreshed when
+`timestamps` is enabled. `PATCH` behaves the same way. Unknown fields are
+rejected exactly like `POST`.
+
+## Delete — `DELETE /{collection}/{id}`
+
+- Without `softDelete`: hard delete of the row.
+- With `softDelete`: sets `deleted_at` (falls through to hard delete after a
+  grace period in the default demo queries).
+
+## Bulk delete — `POST /{collection}/__bulk_delete`
+
+```bash
+curl -X POST http://localhost:8787/api/posts/__bulk_delete \
+  -H 'authorization: Bearer <jwt>' -H 'content-type: application/json' \
+  -d '{"ids":["uuid-1","uuid-2"]}'
+```
+
+Maximum **200 ids** per call — chunk larger deletions in the caller. Requires
+`records.write` like any other write.
+
+## Collections that don't exist yet
+
+A collection is a `_meta_collections` row plus a D1 table, created at runtime
+from its definition. `PUT /_meta/collections/{name}` migrates (**adds columns
+only**); dropping, renaming or retyping a field is a manual D1 migration. See
+[Collections API](/core/collections/) for definition shapes.
+
+## See also
+
+- [REST API](/api/) — auth, meta endpoints, error codes
+- [Permissions & Roles](/api/permissions/) — who may call what
+- [Collections & Records](/concepts/collections/) — the concepts behind the routes
+- [Field Types](/fields/types/) — per-type validation rules

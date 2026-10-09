@@ -1,0 +1,103 @@
+---
+title: Quick Start
+description: Run the core, open the console, and seed your first data.
+---
+
+After [scaffolding a project](/getting-started/installation/):
+
+```bash
+cd acme
+pnpm install
+pnpm dev
+```
+
+`pnpm dev` runs every part in parallel:
+
+| Part | Default port | URL |
+| ---- | ------------ | --- |
+| Core (API) | 8787 | http://localhost:8787 |
+| MCP server | 8788 | http://localhost:8788 |
+| Console | proxied via core in dev | http://localhost:8787 |
+
+Override ports if needed:
+
+```bash
+HAMOLUS_CORE_PORT=8797 HAMOLUS_MCP_PORT=8798 pnpm dev
+```
+
+## First login
+
+1. Open the console URL in a browser.
+2. If the users table is empty, the core reports `setupRequired: true` — create
+   the first admin through the setup flow.
+3. Alternatively, exchange the admin key for a token:
+
+```bash
+curl -X POST http://localhost:8787/api/_auth/token \
+  -H 'content-type: application/json' \
+  -d '{"key":"dev-admin-key-change-me"}'
+# → { "data": { "token": "<jwt>", "expiresAt": "…" } }
+```
+
+> The dev admin key comes from `core/.dev.vars`. Never use it in production.
+
+## Define a collection
+
+Collections are metadata. Create one over HTTP or in code:
+
+```bash
+curl -X PUT http://localhost:8787/api/_meta/collections/posts \
+  -H 'authorization: Bearer <jwt>' \
+  -H 'content-type: application/json' \
+  -d '{
+    "name": "posts",
+    "label": "Posts",
+    "primaryKey": "id",
+    "timestamps": true,
+    "fields": [
+      { "name": "title", "type": "string", "label": "Title", "required": true },
+      { "name": "slug", "type": "slug", "label": "Slug", "required": true, "unique": true },
+      { "name": "published", "type": "boolean", "label": "Published", "default": false }
+    ]
+  }'
+```
+
+The core creates the D1 table, the metadata row, and serves CRUD immediately:
+
+```bash
+curl http://localhost:8787/api/posts -H 'authorization: Bearer <jwt>'
+curl -X POST http://localhost:8787/api/posts \
+  -H 'authorization: Bearer <jwt>' \
+  -H 'content-type: application/json' \
+  -d '{"title":"Hello","slug":"hello"}'
+```
+
+Or declare it in code (`templates/cores/predefined/src/collections/*.ts` pattern)
+via `setCodeDefinitions()` — code-defined collections are authoritative and frozen
+at runtime (records still editable; schema changes require a redeploy).
+
+## Seed data
+
+Seeds are one-off, not part of `pnpm dev`:
+
+```bash
+cd acme
+ADMIN_KEY=$(grep '^ADMIN_KEY=' core/.dev.vars | cut -d= -f2-) \
+  pnpm -F ./seeds/basic seed
+```
+
+## Production deploy
+
+```bash
+cd core
+npx wrangler deploy
+```
+
+One-click deploy buttons and full resource setup are documented in the repository's
+`docs/deploying.md`.
+
+## Next
+
+- [Core architecture](/core/architecture/)
+- [Field definition](/fields/)
+- [API reference](/api/)

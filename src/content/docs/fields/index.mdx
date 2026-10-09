@@ -1,0 +1,123 @@
+---
+title: Field Definition — Overview
+description: What a field is in Hamolus — three outputs from one definition, and where each piece lives.
+---
+
+A **field definition** describes one column of a collection. Hamolus turns that
+single object into **three things at once**:
+
+| Output | What it does |
+| ------ | ------------ |
+| **DDL column** | Physical D1 column (`TEXT` / `NUMERIC` / `INTEGER`) |
+| **Zod validator** | Enforced on every record write |
+| **Console UI** | Form widget + table cell, chosen by `type` and `control` |
+
+Fields never exist on their own — they live inside a collection's `fields` array,
+whether you write that array in the console, over HTTP, or in TypeScript.
+
+```ts
+// core/src/collections/posts.ts  (code-defined)
+import type { CollectionDefinitionInput } from '@hamolus/types'
+
+export const POSTS = {
+  name: 'posts',
+  label: 'Posts',
+  primaryKey: 'id',
+  fields: [
+    { name: 'title', type: 'string', label: 'Title', required: true },
+    { name: 'slug', type: 'slug', label: 'Slug', required: true, unique: true },
+    { name: 'published', type: 'boolean', label: 'Published', default: false },
+  ],
+} satisfies CollectionDefinitionInput
+```
+
+```jsonc
+// PUT /api/_meta/collections/posts   — identical shape
+{
+  "name": "posts",
+  "label": "Posts",
+  "fields": [
+    { "name": "title", "type": "string", "label": "Title", "required": true },
+    { "name": "slug", "type": "slug", "label": "Slug", "required": true, "unique": true },
+    { "name": "published", "type": "boolean", "label": "Published", "default": false }
+  ]
+}
+```
+
+## Three audiences for the same object
+
+```
+              FieldDefinition
+                     │
+     ┌───────────────┼────────────────┐
+     ▼               ▼                ▼
+  Database       API / Zod        Admin console
+  DDL + coerce   validation       FieldEditor → RecordForm → Table
+```
+
+That is why the same property can mean different things in different places:
+
+- `required: true` → `NOT NULL` in DDL **and** a write-time check
+  (unless `default` is also set — then write-time is optional)
+- `control: 'radio'` → no effect on storage; only changes the record form widget
+- `consoleView: 'side'` → no effect on storage; only moves the field in the form
+  layout
+- `localized: true` → storage becomes `{ locale: value }` **only** on six types
+
+## Where parameters are documented
+
+| Page | Covers |
+| ---- | ------ |
+| [Parameters](/fields/parameters/) | Every `FieldDefinition` key: type, default, validation, who reads it |
+| [Field Types](/fields/types/) | All 19 types: storage, value shape, type-specific params |
+| [In the Admin Console](/fields/console/) | FieldEditor cards, RecordForm widgets, table cells, layout slots |
+
+## Quick reference — the 19 types
+
+| `type` | SQL | Localized | Console widget (record form) |
+| ------ | --- | --------- | ---------------------------- |
+| `id` | `TEXT` | | *(not rendered — synthetic PK)* |
+| `string` | `TEXT` | ✅ | text input |
+| `slug` | `TEXT` | ✅ | text input + auto-normalize |
+| `text` | `TEXT` | ✅ | textarea |
+| `richtext` | `TEXT` | ✅ | Lexical editor **or** markdown editor |
+| `number` | `NUMERIC` | | number input |
+| `currency` | `NUMERIC` | | money input + live preview |
+| `custom_currency` | `NUMERIC` | | money input with custom symbol/prefix/suffix |
+| `boolean` | `INTEGER` | | checkbox · toggle · radio |
+| `date` | `TEXT` | | `<input type="date">` |
+| `datetime` | `TEXT` | | `<input type="datetime-local">` |
+| `enum` | `TEXT` | | select · search · radio · checklist · multichecklist |
+| `json` | `TEXT` | | textarea (JSON pretty-printed) |
+| `email` | `TEXT` | ✅ | `<input type="email">` |
+| `url` | `TEXT` | ✅ | `<input type="url">` |
+| `relation` | `TEXT` | | chips · search · radio · checklist · multichecklist |
+| `media` | `TEXT` | | thumbnail + media picker |
+| `document` | `TEXT` | | file tile + document picker |
+| `attachment` | `TEXT` | | file tile + attachment picker |
+
+## Validation at a glance
+
+`.strict()` — unknown keys are errors, not silent no-ops.
+
+Cross-field refinements the schema enforces:
+
+1. `type: 'enum'` ⇒ `enumValues` present and non-empty
+2. `format` only on `richtext`
+3. `control` only on `boolean` / `enum` / `relation` (and only allowed values)
+4. `currency` only on `currency`
+5. `customCurrency` only on `custom_currency`
+
+## Current platform gaps (by design today)
+
+- `indexed` is **metadata only** — no `CREATE INDEX` is emitted
+- `onDelete` on relations is **metadata only** — no cascade/restrict in D1
+- `email` / `url` do not validate format (render hints)
+- `localized` is inert outside the six types that honour it
+- `PUT` only **adds** columns — no rename, retype or drop via the API
+
+## Next
+
+1. [Parameters](/fields/parameters/) — every key in the schema
+2. [Field Types](/fields/types/) — type-by-type reference
+3. [In the Admin Console](/fields/console/) — what the admin sees

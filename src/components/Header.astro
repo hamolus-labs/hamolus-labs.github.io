@@ -1,0 +1,130 @@
+---
+import config from 'virtual:starlight/user-config';
+
+import Search from 'virtual:starlight/components/Search';
+import SiteTitle from 'virtual:starlight/components/SiteTitle';
+import SocialIcons from 'virtual:starlight/components/SocialIcons';
+import ThemeSelect from 'virtual:starlight/components/ThemeSelect';
+import LanguageSelect from 'virtual:starlight/components/LanguageSelect';
+
+/**
+ * Custom site header.
+ *
+ * Extends the default Starlight header with a primary navigation row of the
+ * main documentation sections so readers can jump between areas without
+ * opening the sidebar. Search, social links and the theme toggle keep their
+ * default behaviour.
+ *
+ * - `config.pagefind` decides whether the built-in search renders (same rule
+ *   as the stock header).
+ * - Nav items are hidden below the `md` breakpoint; the sidebar hamburger
+ *   menu remains the mobile navigation.
+ */
+const shouldRenderSearch =
+  config.pagefind || config.components.Search !== '@astrojs/starlight/components/Search.astro';
+
+/** Primary documentation sections shown in the header nav. */
+const navItems = [
+  { label: 'Getting Started', slug: 'getting-started/' },
+  { label: 'Concepts', slug: 'concepts/' },
+  { label: 'Fields', slug: 'fields/' },
+  { label: 'Console', slug: 'console/' },
+  { label: 'API', slug: 'api/' },
+];
+---
+
+<div class="header">
+  <div class="title-wrapper sl-flex">
+    <SiteTitle />
+  </div>
+  <nav class="primary-nav sl-hidden lg:sl-flex" aria-label="Primary">
+    {
+      navItems.map((item) => (
+        <a
+          href={`/${item.slug}`}
+          aria-current={
+            Astro.url.pathname.startsWith(`/${item.slug}`) ? 'page' : undefined
+          }
+        >
+          {item.label}
+        </a>
+      ))
+    }
+  </nav>
+  <div class="search-slot sl-flex print:hidden">
+    {shouldRenderSearch && <Search />}
+  </div>
+  <div class="sl-hidden md:sl-flex print:hidden right-group">
+    <div class="sl-flex social-icons">
+      <SocialIcons />
+    </div>
+    <ThemeSelect />
+    <LanguageSelect />
+  </div>
+</div>
+
+<style>
+  @layer starlight.core {
+    .header {
+      display: flex;
+      gap: var(--sl-nav-gap);
+      justify-content: space-between;
+      align-items: center;
+      height: 100%;
+    }
+
+    .title-wrapper {
+      overflow: clip;
+      padding: 0.25rem;
+      margin: -0.25rem;
+      min-width: 0;
+    }
+
+    .primary-nav {
+      gap: 0.25rem;
+      align-items: center;
+      font-size: 0.875rem;
+      font-weight: 500;
+    }
+
+    .primary-nav a {
+      padding: 0.3rem 0.7rem;
+      border-radius: 0;
+      color: var(--sl-color-gray-2);
+      text-decoration: none;
+      transition:
+        color 0.15s ease,
+        background-color 0.15s ease;
+      white-space: nowrap;
+    }
+
+    .primary-nav a:hover {
+      color: var(--sl-color-white);
+      background: var(--sl-color-gray-6);
+    }
+
+    .primary-nav a[aria-current='page'] {
+      color: var(--sl-color-text-accent);
+      background: var(--sl-color-accent-low);
+      font-weight: 600;
+    }
+
+    .search-slot {
+      flex: 1;
+      justify-content: center;
+      min-width: 0;
+    }
+
+    .right-group,
+    .social-icons {
+      gap: 1rem;
+      align-items: center;
+    }
+
+    .social-icons::after {
+      content: '';
+      height: 2rem;
+      border-inline-end: 1px solid var(--sl-color-gray-5);
+    }
+  }
+</style>

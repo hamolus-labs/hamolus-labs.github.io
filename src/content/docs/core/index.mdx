@@ -1,0 +1,102 @@
+---
+title: Core
+description: The Hamolus core — a Hono API worker on Cloudflare Workers.
+---
+
+The **core** is the heart of every Hamolus project. It is a Hono application
+running on Cloudflare Workers that owns:
+
+- **D1** (SQLite) via Drizzle ORM — data and metadata tables
+- **KV** — settings blob (`settings:v1`)
+- **R2** — media, documents and attachments
+- **Auth** — JWT sessions, privileges, users, super-admin bootstrap
+- **Scope resolution** — multi-tenant `land` / `colony` headers
+- **Code-defined collections & panels** — applied on boot per scope
+- **The REST API** every other part talks to
+
+A generated project owns only a **thin seam file** that hands `@hamolus/core` to
+Wrangler. You never fork the package; you wrap it.
+
+## Package characteristics
+
+`@hamolus/core` ships **raw TypeScript** — `package.json#main` points at
+`./src/index.ts`. Wrangler/esbuild compiles the entry directly, so a project can
+add middleware, mount extra routes or install an error handler without a build
+step. A syntax error in the package breaks every generated project at once.
+
+```bash
+pnpm -F @hamolus/core typecheck
+pnpm -F @hamolus/core dev        # wrangler dev → http://localhost:8787
+pnpm -F @hamolus/core deploy
+pnpm -F @hamolus/core db:generate
+pnpm -F @hamolus/core db:setup   # apply scripts/bootstrap.sql to local D1
+```
+
+`build` is `wrangler deploy --dry-run` — a compile check, not a bundle.
+
+## Layout
+
+| Path | Holds |
+| ---- | ----- |
+| `src/index.ts` | the app: middleware chain, `applyScope`, re-exports |
+| `src/routes/` | one file per HTTP surface |
+| `src/db/` | Drizzle client, schema, DDL map, value coercion, queries |
+| `src/meta/` | settings, lands/colonies, groups, panels, stats, seed |
+| `src/auth/` | password hashing, sessions/JWT, privileges, super-admin |
+| `src/media/`, `src/files/` | R2-backed storage, signed panel assets |
+| `src/config.ts` | build-time project config (`core.config.ts`) |
+| `src/definitions.ts` | code-defined collections and panels |
+| `src/scope.ts` | `x-land` / `x-colony` resolution |
+
+## Code-defined definitions
+
+```ts
+setCodeDefinitions({ collections, panels })
+getCodeDefinitions()
+isCodeCollection(name)
+isCodePanel(id)
+```
+
+Two rules define the model:
+
+1. **Source files are authoritative.** Definitions are re-applied on every deploy
+   for every registered scope.
+2. **Definitions are read-only at runtime.** `PUT`/`DELETE` on a code-defined
+   collection and mutations on code-defined panels return `403`. Records inside
+   them remain editable — the schema is frozen, the data is not.
+
+Zod validation runs at boot (throw, not per-request). Duplicate names are detected.
+
+## Invariants
+
+- **Collections are created at runtime.** A collection is a `_meta_collections`
+  row plus a D1 table. `PUT` only ever *adds* columns — dropping, renaming or
+  retyping a field is a manual D1 migration.
+- **Media and panel assets are signed, not public.** Panel asset URLs are
+  short-lived HMAC-signed. Public `/media/...` URLs need no token; a private file
+  does not come back from `GET /api/{collection}/{id}`.
+- **Unknown `x-land`/`x-colony` must not mint privileges.** An unknown scope
+  mints nothing.
+- **A failed definition write leaves previous definitions standing** rather than
+  half-applied.
+- **The core does not aggregate.** It returns `meta.total`, `meta.totalPages`
+  and `lastUpdate`; business aggregation belongs in the caller.
+
+## Middleware order
+
+```
+cors() on /api/*
+  → mcpMachineRoutes on /api/_mcp     (BEFORE JWT — instance id auth)
+  → JWT on /api/*
+  → applyScope on /api/*              (AUTH_SKIP + PUBLIC_GETS branches)
+  → domain routes (_auth, _meta, _media, _config, _panels, _plugins, dynamic)
+```
+
+`AUTH_SKIP` paths: `/api/_auth/token`, `/api/_auth/login`, `/api/_auth/setup`,
+`/api/_auth/super`, `/api/health`.
+
+## Next
+
+- [Architecture](/core/architecture/) — request flow and parts
+- [Collections](/core/collections/) — define tables at runtime
+- [Multi-tenancy](/core/multi-tenancy/) — lands and colonies

@@ -1,0 +1,311 @@
+---
+title: MCP server reference
+description: The full MCP server surface — transport, 42 tools, resources, prompts, per-collection modes, dynamic tools, env vars, running and verifying.
+---
+
+The MCP server is a stateless Cloudflare Worker (`@hamolus/mcp`) that turns the core
+API into an MCP surface. This page is the reference for what it offers and how it
+runs. For the instance model and a step-by-step setup, see
+[MCP](/mcp/) and the [end-to-end example](/mcp/example/).
+
+## Transport
+
+Streamable HTTP on `POST /mcp`. Stateless — every request stands alone; there is no
+session, and no progress or notification support. Callers must accept both
+`application/json` and `text/event-stream`.
+
+The instance configuration and the token exchange are resolved **before** the
+handler runs, so the core's own status codes and wording (`MCP_DISABLED`,
+`TOKEN_REVOKED`) survive instead of collapsing into a bare JSON-RPC `-32603`.
+
+The server **never proxies** `/media`, `/documents`, or `/attachments` public-file
+routes — only `/api`.
+
+## Tools (42 static, four groups)
+
+Every tool also accepts optional `land` / `colony` arguments that override the server
+default `x-land` / `x-colony` (multi-scope cores only).
+
+### records — records, collections
+
+| Tool | Notes |
+| --- | --- |
+| `list_collections` | |
+| `get_collection` | |
+| `put_collection` | `hide` collections refuse; see per-collection mode |
+| `delete_collection` | `hide` collections refuse |
+| `list_records` | honours `search`, `locale`, `sortBy` / `sortDir`, a JSON `filter` map, and paging (`page`, `pageSize` ≤ 100) |
+| `get_record` | |
+| `create_record` | |
+| `update_record` | |
+| `delete_record` | |
+| `bulk_delete_records` | capped at 200 ids |
+| `get_collection_last_update` | |
+
+### media — file libraries
+
+| Tool | Notes |
+| --- | --- |
+| `list_media` | taxonomy filters + search |
+| `list_documents` | taxonomy filters + search |
+| `list_attachments` | taxonomy filters + search |
+| `get_asset` | |
+| `update_asset` | |
+| `delete_asset` | |
+| `upload_media` | uploads take base64 `data` (≤ 10 MB) and the core's multipart field names |
+| `upload_file` | same base64 contract as `upload_media` |
+| `get_media_taxonomy` | |
+| `update_media_taxonomy` | |
+
+### meta — settings, groups, config, plugin values
+
+| Tool | Notes |
+| --- | --- |
+| `check_core` | |
+| `list_lands`, `list_colonies`, `get_land`, `get_colony` | |
+| `get_stats` | |
+| `get_settings` | |
+| `update_settings` | shallow merge |
+| `get_localization` | |
+| `list_groups`, `get_group`, `put_group`, `delete_group` | `put_group` rejects cycles |
+| `list_config`, `get_config`, `put_config`, `delete_config` | |
+| `list_plugin_values`, `get_plugin_value`, `put_plugin_value`, `delete_plugin_value` | |
+
+### admin — tenants, users, privileges (off by default)
+
+`get_current_user`, `list_users`, `create_user`, `update_user`, `delete_user`,
+`list_privileges`, `put_privilege`, `delete_privilege`, `put_land`, `delete_land`,
+`put_colony`, `delete_colony`, `export_scope`, `import_scope`
+
+`admin` is **opt-in** on the instance because it can create and delete tenants, users
+and privileges. A new instance defaults to `records,media,meta`.
+
+Which groups an instance gets is **its configuration in the core**, not a var on the
+worker. Result cap on every tool: 250,000 characters.
+
+### Read-only instances drop the write tools
+
+A read-only instance does not register write tools at all, so they never appear in
+`tools/list` — an agent is not offered an action that will be refused. The core
+refuses them regardless, which is the boundary that actually holds; hiding them is
+about not wasting a turn on a tool that cannot work.
+
+## Per-collection `mcp` mode
+
+Every collection definition carries an `mcp` key that decides what this server may do
+with it. It sits next to `fields` because it is part of the definition — the same
+definition drives the console, the REST API and this surface.
+
+```ts
+{
+  name: 'salaries',
+  label: 'Salaries',
+  mcp: 'hide',          // 'read' (default) | 'write' | 'hide'
+  fields: [ /* … */ ],
+}
+```
+
+| Mode | Tools | Resources | In the collection index |
+| --- | --- | --- | --- |
+| `read` *(default)* | read verbs only — `list_records`, `get_record`, `get_collection_last_update`, and the generated `list_<c>` / `get_<c>` | readable | yes |
+| `write` | all of the above plus `create_record`, `update_record`, `delete_record`, `bulk_delete_records`, and the generated `create_` / `update_` / `delete_<c>` | readable | yes |
+| `hide` | none — every tool refuses, including `get_collection` and `delete_collection` | every read refuses | **no** |
+
+**The default is `read`.** A collection with no `mcp` key used to be fully writable
+through the server; it now is not. Set `mcp: 'write'` on the collections an agent
+should be able to change — the safe mode is the one you get for free, and the mode
+that grants write access is the one somebody types on purpose.
+
+Where it is enforced, and why all of it:
+
+- **Generic tools** check the collection they were handed, so the mode cannot be
+  side-stepped by using a generic form instead of a generated tool.
+- **Generated tools** are simply not registered: a `read` collection never appears
+  with a `create_` verb in `tools/list`, and a `hide` collection does not appear at
+  all. A model cannot call a tool it was never shown.
+- **Resources** enforce it too, because `hamolus://records/<collection>` is a second
+  way in.
+- **The collection index** omits `hide`, so the model is never told about a collection
+  it would immediately be refused on.
+- **A read-only instance still wins** over `mcp: 'write'` — the two are an
+  intersection, and a write needs both.
+
+A refusal names the collection and the fix, e.g. _"The 'blog_posts' collection is
+read-only through MCP (mcp: 'read' in its definition). Set mcp to 'write' to let this
+server change records."_
+
+`put_collection` and `delete_collection` refuse against a `hide` collection, closing
+the loop: a hidden collection cannot be un-hidden by the same server that cannot see
+it.
+
+**This is a surface policy, not authorization.** Who may write at all is still the
+caller's privilege (`records.write`) and the core's own scope rules, enforced on every
+request regardless of `mcp`.
+
+## Dynamic tools
+
+Off by default. The instance's configuration names the collections to generate tools
+for, and caps the count. Each collection's `mcp` mode still decides which verbs it
+gets.
+
+Each collection yields `list_<c>`, `get_<c>`, `create_<c>`, `update_<c>` and
+`delete_<c>`. The `data` argument of `create_` / `update_` is built with
+`buildEntitySchema()` from `@hamolus/types` — the exact function the core validates
+`POST /:collection` with — so a generated tool cannot accept something the core would
+reject, and a required field, an enum and a relation target are visible in the tool's
+own JSON schema.
+
+- **Capped on purpose.** A model carrying 200 tool schemas in every request is worse
+  off than one that calls `get_collection` when it needs to. An explicit list keeps
+  its own order, so your first choices survive the cap.
+- **Collisions are skipped, never overwritten.** A collection named `config` does not
+  replace the static `list_config` / `get_config`; it only adds the verbs the static
+  surface lacks.
+- **Cached, and invalidated on write.** Definitions are read from `/_meta/collections`
+  + `/_meta/localization` and held for 5 minutes per scope. `put_collection` /
+  `delete_collection` drop the entry, so the next request sees the change. A core
+  that is unreachable yields no generated tools and leaves the static surface working.
+
+The two deprecated vars still work on the legacy path only: `MCP_DYNAMIC_TOOLS`
+(`all` or a comma-separated list) and `MCP_DYNAMIC_MAX` (cap, default 10).
+
+## Resources
+
+Read-only, URI-addressable views of the same endpoints. Every payload is the core's
+own JSON, pretty-printed, so a resource and the equivalent tool call return the same
+bytes.
+
+| URI | Contents |
+| --- | --- |
+| `hamolus://spec/collection-definition` | the JSON Schema a collection definition must satisfy — read it before `put_collection` rather than guessing a field type |
+| `hamolus://collections` | every collection definition — the natural place to start |
+| `hamolus://settings`, `hamolus://localization`, `hamolus://stats`, `hamolus://lands`, `hamolus://groups` | the scope-wide documents, unchanged |
+| `hamolus://collection/{collection}` | one collection definition (listed, so the index is browsable) |
+| `hamolus://records/{collection}` | first page (25 rows) of a collection |
+| `hamolus://record/{collection}/{id}` | one record |
+| `hamolus://media/{id}`, `hamolus://document/{id}`, `hamolus://attachment/{id}` | asset metadata and absolute url; the bytes are never inlined |
+| `hamolus://group/{id}`, `hamolus://config/{key}` | one navigation group, one config entry |
+
+**One deliberate limitation:** a resource URI carries no arguments, so resources
+resolve against the *instance's* land/colony and the default locale. To read another
+scope or resolve localized fields to a specific language, use the tools — they take
+`land`, `colony` and `locale`, and the core refuses any scope outside the instance's.
+
+A payload over 1 MB is refused rather than truncated; narrow it with a list tool
+(`search`, `filter`, `pageSize`) instead.
+
+## Prompts
+
+`prompts/list` returns seven task-shaped starting points, each a single user turn that
+names the tools to call and the order:
+
+| Prompt | For |
+| --- | --- |
+| `explore_content` | mapping the content model: collections, fields, row counts |
+| `draft_record` | creating one record from a brief, schema first |
+| `bulk_import` | loading many records, validating before writing |
+| `review_collection` | auditing duplicates, empty required fields, broken relations |
+| `migrate_records` | copying records between collections, field by field |
+| `manage_media` | tidying the media library, normalising names and tags |
+| `provision_user` | creating an account with the right role |
+
+A prompt never guesses data — it tells the model to fetch the real schema, and states
+the refusals (a read-only instance, disabled groups, destructive tools) up front so
+the model does not discover them by hitting an error mid-task.
+
+## Env
+
+**Two vars, and there are no secrets.**
+
+| Var | Meaning |
+| --- | --- |
+| `CORE_API_URL` | core base URL **including `/api`** (default `http://localhost:8787/api`) |
+| `MCP_INSTANCE_ID` | this server's id in the core, created in the console (**Environment → MCP**). Empty means "not configured" and the server says so. |
+
+`MCP_INSTANCE_ID` is a credential, not a label: anyone holding it can read this
+server's configuration. It is generated for you precisely so it cannot be guessed, and
+`GET /` on the worker echoes it so you can confirm which instance is running.
+
+With `MCP_INSTANCE_ID` set, the server is **console-managed**: it fetches its scope,
+read-only state and tool groups from `GET /api/_mcp/config` and refuses everything
+until that call succeeds.
+
+### Deprecated, still honoured
+
+Read these only when migrating a server that predates the console.
+
+| Var | Why it went away |
+| --- | --- |
+| `CORE_ADMIN_KEY` | platform-wide: a server serving one colony could reach every land and colony. An instance is scoped to one colony. |
+| `CORE_API_TOKEN` | the alternative to the above; a long-lived JWT for the whole platform. Per-user tokens from the console replace it. |
+| `MCP_BEARER_TOKEN` | one static shared secret compared verbatim on every request, so it cannot be attributed or revoked per person. Per-user tokens are revocable one at a time. |
+| `MCP_READONLY` | narrowed only what the worker *offered*, not what the core *accepted*. The core now enforces it through permissions. |
+| `MCP_TOOL_GROUPS` | belonged to the deployment, so changing the tool surface meant a redeploy. It is per-instance configuration now. |
+| `MCP_DYNAMIC_TOOLS` / `MCP_DYNAMIC_MAX` | same — per-instance configuration now. |
+| `CORE_LAND` / `CORE_COLONY` | the instance knows its own colony. These are consulted only on the legacy path. |
+
+`GET /` reports `mode: "console-managed"` or `mode: "legacy"`, so a half-finished
+migration is visible from outside.
+
+## Run locally
+
+In a generated project (`hamolus add mcp`), the root `pnpm dev` starts the MCP server
+too — `http://localhost:8788/mcp`. From the package directly:
+
+```bash
+# write .dev.vars (gitignored) with the two vars below first
+cd packages/mcp
+pnpm exec wrangler dev --port 8790 --ip 0.0.0.0
+```
+
+`.dev.vars` example — the instance id comes from the console, so create one first:
+
+```
+CORE_API_URL=http://localhost:8787/api
+MCP_INSTANCE_ID=mcp_xxxxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+Run more than one worker at once and give each its own inspector port, or they
+collide on the default:
+
+```bash
+pnpm exec wrangler dev --port 8790 --inspector-port 9230 --ip 0.0.0.0
+```
+
+Verify with curl (JSON-RPC over Streamable HTTP; SSE accept is required):
+
+```bash
+curl -X POST http://localhost:8790/mcp \
+  -H 'content-type: application/json' \
+  -H 'accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"x","version":"0"}}}'
+```
+
+Then `tools/list`, `resources/list`, `resources/templates/list` and `prompts/list`
+on the same endpoint. Any `GET` that is not `/mcp` returns a small JSON index of what
+this server offers.
+
+## Verify the surface
+
+With a core running locally and a token issued for the instance, the cheapest
+end-to-end check is a stateless `tools/list`:
+
+```bash
+TOKEN=$(cat ~/.hamolus-mcp-token)
+curl -sX POST http://localhost:8790/mcp \
+  -H "authorization: Bearer $TOKEN" \
+  -H 'content-type: application/json' \
+  -H 'accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | grep -c '"name"'
+```
+
+Worth checking when something looks wrong:
+
+- **Missing `Authorization` header** → `401`, and it says the server is
+  console-managed.
+- **Instance switched off** → `403 FORBIDDEN`, "This MCP instance is disabled".
+- **Token revoked** → `401`, distinguishable from a wrong secret by the reason.
+- **Read-only instance** → write tools are absent from the count, not merely failing
+  when called.
+- **A second token passed to another instance** → `401`. A token belongs to one
+  instance, and the instance id is held against it.

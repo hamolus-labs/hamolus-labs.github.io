@@ -1,0 +1,181 @@
+---
+title: Building Collections in the Console
+description: Walkthrough of the console CollectionEditor — metadata, fields, groups, icons and what happens on save.
+---
+
+The console CollectionEditor is how most projects define collections — no code,
+no curl. This page walks the UI end-to-end.
+
+Path: **Collections** in the sidebar → **New collection** or open an existing one
+→ edit.
+
+---
+
+## Collection properties
+
+Top of the editor (before the field list):
+
+| Field | Effect |
+| ----- | ------ |
+| Name | Table + API segment. Snake_case. Locked after create (schema change needs a new collection or code-defined path). |
+| Label | Console nav + page title |
+| Description | Optional help text |
+| Group | Navigation group select, including **None (ungrouped)** |
+| Icon | Named console icon (`file`, `users`, `tag`, `mail`, `folder`, `grid`, `list`, `code`, `database`, `star`, `calendar`, `zap`, `heart`, …). Unknown/empty → folder glyph |
+| Primary key | Defaults to `id` |
+| Timestamps | Toggle — adds `created_at` / `updated_at` |
+| Soft delete | Toggle — adds `deleted_at`; deletes become soft |
+| MCP mode | `read` (default) · `write` · `hide` — what MCP instances may do to this collection |
+
+On save the core:
+
+1. Validates the definition (Zod, strict)
+2. Creates the D1 table if new
+3. `ALTER TABLE … ADD COLUMN` for any new fields (based on `PRAGMA table_info`)
+4. Upserts the `_meta_collections` metadata row
+5. Invalidates related queries — the collection appears immediately
+
+> **`PUT` migrates — it never drops.** Removing a field from the editor does
+> **not** drop the column. Renaming a field does **not** rename the column —
+> you get a new column and the old one remains. Dropping requires a manual D1
+> migration.
+
+---
+
+## Field list
+
+Below the properties sits the **FieldEditor stack** — one card per field, in
+order.
+
+### Reordering
+
+Each card has ↑ / ↓. Order affects:
+
+- Record form field order (within a slot/group)
+- Table column order (default)
+- Panel field pickers (list order)
+
+### Adding a field
+
+1. Add field → new card at the end
+2. Pick the **type** first — the parameter grid changes
+3. Set Name (snake_case) and Label
+4. Configure constraints + type-specific params
+5. Toggle flags (`required`, `unique`, `localized`, …)
+6. Optionally set Console view slot, Control widget, Form group
+
+### Removing a field
+
+Remove on the card. On save the definition no longer includes the field — the
+API stops accepting/returning it — but the **physical column stays** in D1.
+
+### Grouping fields
+
+Set the same **Form group** string on multiple fields:
+
+```
+title      → group: "Publishing"
+slug       → group: "Publishing"
+published  → group: "Publishing"
+body       → (no group)
+notes      → group: "Meta", consoleView: side
+```
+
+In the record form:
+
+- "Publishing" renders as one collapsible section (starts open unless
+  *Start collapsed* = yes)
+- Ungrouped fields (`body`) appear inline between group blocks
+
+---
+
+## What the admin sees after save
+
+Open the collection from the Collections list:
+
+| Surface | Behaviour |
+| ------- | --------- |
+| **Records table** | Columns from fields; search, sort, group-by, column picker, resize |
+| **New / Edit record** | RecordForm with header/normal/side/footer slots + groups |
+| **Definition card** | Read-only structure: properties + field flags/config table |
+| **Sidebar nav** | Collection under its group (or ungrouped root) with icon |
+
+Collections list also supports **pinning** favourites (`console-colw`-style
+localStorage prefs) for quick access.
+
+---
+
+## Example — blog posts
+
+| Property | Value |
+| -------- | ----- |
+| Name | `posts` |
+| Label | Posts |
+| Group | `content_blog` (Content → Blog) |
+| Icon | `file` |
+| Timestamps | on |
+| Soft delete | on |
+
+| Field | Type | Settings |
+| ----- | ---- | -------- |
+| `title` | string | required, header slot |
+| `slug` | slug | unique |
+| `body` | richtext | format: markdown |
+| `excerpt` | text | localized, side slot |
+| `cover` | media | |
+| `category_id` | relation | → `categories.id`, belongsTo, control: search |
+| `status` | enum | draft \| review \| live, control: combobox, default: draft |
+| `published_at` | datetime | |
+| `price` | currency | IDR, min 0, group: "Pricing" |
+| `internal_notes` | text | hidden: true |
+
+Result:
+
+- Nav shows **Posts** under Content → Blog with a file icon
+- Record form: title on top, Publishing group (slug, status, published_at),
+  body, Pricing group (price), sidebar has excerpt + cover, hidden notes never
+  render
+- Table: title, status, category, price, published_at columns
+- MCP can read the collection (`mcp: read` default) but not write
+
+---
+
+## Code-defined alternative
+
+Prefer schema in pull requests? Declare the same shape in
+`templates/cores/predefined/src/collections/*.ts` (or your project's
+`core/src/collections/`) and register:
+
+```ts
+setCodeDefinitions({ collections: [POSTS] })
+```
+
+| | Console (runtime) | Code-defined |
+| - | ----------------- | ------------ |
+| Author | Admin in the UI | Developer in source |
+| Review | Implicit (who has `collections.write`) | Pull request |
+| Schema change | Console PUT (add columns only) | Edit + redeploy |
+| Runtime schema edit | Allowed | `403` |
+| Record edit | Full | Full |
+
+Both kinds can coexist in one project.
+
+---
+
+## Permissions required
+
+| Action | Permission |
+| ------ | ---------- |
+| List / read definitions | `collections.read` |
+| Create / update / delete | `collections.write` |
+| Edit records | `records.read` / `records.write` |
+
+The last active admin is protected from deletion. Land/colony scope still
+applies — a colony editor only sees collections in their scope.
+
+## See also
+
+- [Field Definition](/fields/)
+- [In the Admin Console](/fields/console/)
+- [Collections concept](/concepts/collections/)
+- [Console overview](/console/)

@@ -1,0 +1,146 @@
+---
+title: Hamolus Vocabulary
+description: Every Hamolus term defined — universe, land, colony, collection, field, panel, scope and more.
+---
+
+Hamolus has a small set of domain words. Once they click, the rest of the platform
+reads naturally. This page is the glossary; deeper pages follow each term.
+
+<div class="term-card">
+  <strong>Universe</strong>
+  <span>
+    The global plane of a Hamolus deployment — everything that is <em>not</em>
+    scoped to a land or colony. Lands registry, colonies registry, super-admins
+    and platform privileges live here. In privilege terms it is
+    <code>scope: 'universe'</code>.
+  </span>
+</div>
+
+<div class="term-card">
+  <strong>Land</strong>
+  <span>
+    The top tenant unit. A land owns colonies, collections, records, media,
+    users and panels. Ids end with <code>_lnd</code> (e.g. <code>acme_lnd</code>).
+    The reserved root land is <code>root_lnd</code>.
+  </span>
+</div>
+
+<div class="term-card">
+  <strong>Colony</strong>
+  <span>
+    An optional sub-unit under a land — a department, region, brand or
+    workspace. Ids end with <code>_cny</code>. The reserved root colony is
+    <code>root_cny</code>. Most data is scoped to <code>(land, colony)</code>.
+  </span>
+</div>
+
+<div class="term-card">
+  <strong>Scope</strong>
+  <span>
+    The resolved <code>(land, colony)</code> pair for one request. Selected via
+    <code>x-land</code> / <code>x-colony</code> headers (or path rewrite), validated
+    against the registry, and pinned into the JWT session.
+  </span>
+</div>
+
+<div class="term-card">
+  <strong>Collection</strong>
+  <span>
+    The schema of one table — name, fields, flags. Stored as metadata
+    (<code>_meta_collections</code>) and turned into a D1 table plus a CRUD API.
+    Defined at runtime (console/API) or in code (<code>setCodeDefinitions</code>).
+  </span>
+</div>
+
+<div class="term-card">
+  <strong>Field</strong>
+  <span>
+    One column of a collection: type, constraints, console widget, localization.
+    Smallest unit of schema. Fields never exist outside a collection.
+  </span>
+</div>
+
+<div class="term-card">
+  <strong>Record</strong>
+  <span>
+    One row of a collection. Served by
+    <code>GET/POST/PUT/PATCH/DELETE /api/:collection[/:id]</code>. Always carries
+    the scope it was written under.
+  </span>
+</div>
+
+<div class="term-card">
+  <strong>Panel</strong>
+  <span>
+    A data-driven app surface: a manifest declares views (table/form/dashboard),
+    field ACL, roles and menu against one collection. Enforced over HTTP by the
+    core; rendered by <code>@hamolus/panel</code>.
+  </span>
+</div>
+
+<div class="term-card">
+  <strong>Console</strong>
+  <span>
+    The SolidJS admin SPA. Generic — it reads collection/panel metadata from the
+    core. Your project only supplies <code>console.config.ts</code> and a
+    <code>mount()</code> call.
+  </span>
+</div>
+
+<div class="term-card">
+  <strong>Privilege / Role</strong>
+  <span>
+    A named bundle of permissions scoped to universe, land or colony. Built-ins:
+    <code>land_admin</code>, <code>admin</code>, <code>manager</code>,
+    <code>editor</code>, <code>viewer</code>, <code>panel_user</code>. Users hold
+    one privilege per scope.
+  </span>
+</div>
+
+<div class="term-card">
+  <strong>Permission</strong>
+  <span>
+    One of 20 capability keys with <code>.read</code> / <code>.write</code> —
+    e.g. <code>records.read</code>, <code>mcp.write</code>, <code>lands.write</code>.
+    Enforced by the core on every route; the UI only mirrors them.
+  </span>
+</div>
+
+<div class="term-card">
+  <strong>Settings vs Config entry</strong>
+  <span>
+    <strong>Settings</strong> — free-form KV blob (<code>settings:{"{land}"}:{"{colony}"}:v1</code>),
+    operator-editable, no redeploy. <strong>Config entry</strong> — keyed row in
+    <code>_configs</code> (<code>(land, colony, key)</code>), strict schema, also
+    no redeploy.
+  </span>
+</div>
+
+<div class="term-card">
+  <strong>Code-defined</strong>
+  <span>
+    Collections/panels declared in source and applied on boot via
+    <code>setCodeDefinitions()</code>. Authoritative, frozen at runtime
+    (<code>403</code> on schema mutation); records stay editable.
+  </span>
+</div>
+
+## The scope ladder at a glance
+
+```
+universe  (global: lands registry, colonies registry, super-admins)
+  └── land       (tenant / organization)        id: *_lnd, root: root_lnd
+        └── colony (optional sub-unit)          id: *_cny, root: root_cny
+```
+
+| Concept | Privilege scope | Endpoint prefix | Registry table |
+| ------- | --------------- | --------------- | -------------- |
+| Universe | `universe` | `/api/_meta/universe/*` | `_meta_lands`, `_meta_colonies` |
+| Land | `land` | headers `x-land` | scoped rows |
+| Colony | `colony` | headers `x-colony` | scoped rows |
+
+## Next
+
+- [Universe, Land & Colony](/concepts/scope/) — the full multi-tenancy model
+- [Collections & Records](/concepts/collections/) — how data is modelled
+- [Field Definition](/fields/) — every field parameter

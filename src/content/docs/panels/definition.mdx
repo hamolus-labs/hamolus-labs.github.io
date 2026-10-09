@@ -1,0 +1,140 @@
+---
+title: Panel Definition
+description: Full panel manifest schema — views, ACL, filters, metrics and roles.
+---
+
+A **panel definition** (manifest) describes one panel app: which collection it
+reads, how data is presented, who may do what, and how it looks.
+
+Schema source: `packages/types/src/panel.ts`. Validation is `.strict()` at the
+type level for critical keys; the view schema is intentionally not `.strict()` —
+unknown keys are dropped silently, so typos disappear rather than error.
+
+## Root properties
+
+| Property | Type | Notes |
+| -------- | ---- | ----- |
+| `id` | `string` | Unique panel id. |
+| `name` | `string` | Display name. |
+| `description` | `string` | Optional. |
+| `collection` | `string` | Target collection name. |
+| `views` | `PanelView[]` | `table` \| `form` \| `dashboard`. |
+| `filters` | `PanelFilter[]` | `value` or `source` kind. |
+| `menu` | menu refs | Navigation entries. |
+| `roles` | record | Role → operation subset. |
+| `members` | refs | Explicit member assignments. |
+| `theme` | object | Presentation overrides. |
+
+## Views
+
+`PANEL_VIEW_KINDS = ['table', 'form', 'dashboard']`.
+
+### Table view
+
+- Lists records with field selection.
+- `fields.read` / `fields.write` per field (ACL).
+- Search and column configuration.
+
+### Form view
+
+- Record create/edit surface.
+- Field placement mirrors console form concepts where applicable.
+- Write ACL is enforced server-side on every mutation.
+
+### Dashboard view
+
+- Metric cards and summary widgets.
+- `PanelMetricDefinition[]` — aggregations over the collection.
+- No direct record mutation.
+
+## Field ACL
+
+Per view, per field:
+
+| Access | Meaning |
+| ------ | ------- |
+| readable | Field appears in list/detail reads |
+| writable | Field accepted on create/update |
+
+A `hidden` collection field cannot be referenced by a manifest at all — the
+reference is invalid.
+
+## Roles and operations
+
+Role operations are a **subset** of allowed operations, never a grant list that
+widens the session:
+
+```jsonc
+{
+  "roles": {
+    "viewer": ["read"],
+    "editor": ["read", "create", "update"],
+    "manager": ["read", "create", "update", "delete"]
+  }
+}
+```
+
+Effective permission = session permissions ∩ manifest ACL.
+
+## Filters
+
+| Kind | Behaviour |
+| ---- | --------- |
+| `value` | Fixed value filter baked into the manifest |
+| `source` | Value resolved from session/scope at runtime |
+
+## Referential validation
+
+Manifests that reference collections, fields, menus or roles that do not exist
+fail with `PANEL_REFERENCE_INVALID`. The offline gate
+`pnpm check:panel-runtime` catches this without a live core.
+
+## Bootstrap
+
+```
+GET /api/_panels/:id/bootstrap
+```
+
+Returns the **effective** manifest for the caller: views with ACL applied,
+resolved filter values, and the operations the session may perform. This is the
+source of truth the client renders from — clients never re-derive ACL locally.
+
+## Assets
+
+Each view can own panel assets (images, exports):
+
+```
+GET    /api/_panels/:id/views/:viewId/assets
+POST   /api/_panels/:id/views/:viewId/assets
+DELETE /api/_panels/:id/views/:viewId/assets/:assetId
+```
+
+Served privately via signed URLs (see [Panels](/panels/#private-assets)).
+
+## Records & dashboard under a view
+
+```
+GET|POST       /api/_panels/:id/views/:viewId/records
+GET|PUT|PATCH|DELETE /api/_panels/:id/views/:viewId/records/:recordId
+GET            /api/_panels/:id/views/:viewId/relations/:field/options
+GET            /api/_panels/:id/views/:viewId/dashboard
+```
+
+Relation option endpoints power combobox/search widgets without granting full
+collection read.
+
+## Code-defined panels
+
+Panels can be registered via `setCodeDefinitions({ panels: [...] })` alongside
+code-defined collections. Runtime mutations of code-defined panels return `403`;
+the source file is authoritative on every deploy.
+
+## Checklist
+
+- [ ] `id` unique across the project
+- [ ] `collection` exists (code-defined or runtime)
+- [ ] Every field referenced by a view exists on the collection
+- [ ] No `hidden` field referenced in `fields.read` / `fields.write`
+- [ ] Role operations are subsets of what the session can actually do
+- [ ] Dashboard metrics reference valid fields
+- [ ] Menu refs resolve to real panels/collections

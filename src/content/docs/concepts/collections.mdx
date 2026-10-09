@@ -1,0 +1,163 @@
+---
+title: Collections & Records
+description: How Hamolus models data — collections as metadata, records as scoped rows.
+---
+
+Everything in Hamolus is a **collection**. A collection is not a hardcoded table —
+it is metadata that the core turns into a D1 table, a validation schema and a CRUD
+API.
+
+## Mental model
+
+```
+Collection definition (metadata)
+        │
+        ├──► D1 table          (physical columns, scoped by land/colony)
+        ├──► Zod validator     (record payloads on write)
+        ├──► Console UI        (auto forms + tables from metadata)
+        ├──► Panel manifests   (reference fields by name)
+        └──► MCP tools         (dynamic tools from definitions)
+```
+
+Change the definition → the next `PUT` migrates the table (adds columns only) and
+every consumer re-reads metadata.
+
+## Anatomy of a collection
+
+```jsonc
+{
+  "name": "posts",
+  "label": "Posts",
+  "description": "Blog posts",
+  "group": "content_blog",
+  "icon": "file",
+  "timestamps": true,
+  "softDelete": false,
+  "primaryKey": "id",
+  "mcp": "read",
+  "fields": [
+    { "name": "title", "type": "string", "label": "Title", "required": true },
+    { "name": "slug", "type": "slug", "label": "Slug", "required": true, "unique": true },
+    { "name": "published", "type": "boolean", "label": "Published", "default": false }
+  ]
+}
+```
+
+| Property | Effect |
+| -------- | ------ |
+| `name` | Table name + API segment. `^[a-z][a-z0-9_]*$`. |
+| `label` | Human name in console nav and tables. |
+| `group` | Navigation group id (nested tree under Groups). |
+| `icon` | Console sidebar icon (`file`, `users`, `tag`, …). |
+| `timestamps` | Adds `created_at` / `updated_at`. |
+| `softDelete` | Adds `deleted_at`; deletes become soft. |
+| `primaryKey` | Defaults to `id`. Column always exists even if not declared. |
+| `mcp` | `read` (default) \| `write` \| `hide` — what MCP servers may do. |
+| `fields` | `FieldDefinition[]` — see [Field Definition](/fields/). |
+
+Reserved names: `_meta`, `_auth`, `health`.
+
+## Where collections live
+
+| Kind | Source of truth | Schema change | Delete schema |
+| ---- | --------------- | ------------- | ------------- |
+| Runtime-defined | console / `PUT /_meta/collections/{name}` | `PUT` adds columns only | `DELETE` drops table |
+| Code-defined | `src/collections/*.ts` via `setCodeDefinitions()` | edit source + redeploy | not allowed (`403`) |
+
+Records inside code-defined collections remain fully editable — only the schema
+is frozen.
+
+## Records
+
+A record is one scoped row:
+
+```jsonc
+// GET /api/posts/abc
+{
+  "data": {
+    "id": "abc",
+    "title": "Hello",
+    "slug": "hello",
+    "published": false,
+    "created_at": "2026-10-06T10:00:00.000Z",
+    "updated_at": "2026-10-06T10:00:00.000Z"
+  }
+}
+```
+
+CRUD surface:
+
+```
+GET    /api/:collection              list (page, pageSize, search, sort)
+GET    /api/:collection/:id          one record
+POST   /api/:collection              create
+PUT    /api/:collection/:id          full update
+PATCH  /api/:collection/:id          partial update
+DELETE /api/:collection/:id          delete (soft if softDelete)
+POST   /api/:collection/__bulk_delete  max 200 ids
+GET    /api/:collection/__lastUpdate   cache invalidation helper
+```
+
+### Write rules that surprise people
+
+| Rule | Behaviour |
+| ---- | --------- |
+| `required` + `default` | Field is **optional** on write — the default fills it |
+| `hidden` | Never appears in API output; cannot be referenced by panels |
+| Localized field | Value is `{ "en": "...", "id": "..." }` unless `?locale=` resolves it |
+| `search` | Strict — a typo returns an error, it is not ignored |
+| Relations | Metadata only — no FK enforcement, no join on read |
+
+### List response shape
+
+```jsonc
+{
+  "data": [ /* records */ ],
+  "meta": { "page": 1, "pageSize": 20, "total": 3, "totalPages": 1 }
+}
+```
+
+The core does **not** aggregate business metrics — it returns counts and
+`lastUpdate`; charts belong in panels or the caller.
+
+## Navigation groups
+
+Collections can be nested into a nav tree:
+
+```
+Content
+├── Blog     (group id: content_blog)
+├── Docs     (group id: content_docs)
+Settings
+└── Theme
+```
+
+```
+PUT /api/_meta/groups/{id}
+{ "id": "content_blog", "label": "Blog", "parent": "content", "icon": "file" }
+```
+
+Unknown group values still render as implicit root groups in the console.
+
+## Lifecycle in the admin console
+
+1. **Collections** page → New collection (or edit existing).
+2. Collection editor shows name, label, icon, flags and a **field list** —
+   each field is a card you can reorder, configure and remove.
+3. Save → core creates/migrates the D1 table immediately.
+4. Open the collection → record table + create/edit form, driven entirely by
+   the field metadata you just saved.
+
+See [Building Collections](/console/collection-editor/) for
+the console walkthrough and
+[Field Definition](/fields/) for every field parameter.
+
+## Design checklist
+
+- [ ] Names snake_case; labels human-readable
+- [ ] Every human field has a `label`
+- [ ] Prefer `default` over bare `required` when a fallback exists
+- [ ] `timestamps: true` on anything users create
+- [ ] `softDelete: true` when deletes must be recoverable
+- [ ] `mcp` mode set deliberately (`hide` for sensitive collections)
+- [ ] Localized fields only on types that honour `localized`

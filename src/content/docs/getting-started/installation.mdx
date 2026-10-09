@@ -1,0 +1,128 @@
+---
+title: Installation
+description: Install the Hamolus CLI and scaffold a new project.
+---
+
+## Prerequisites
+
+| Requirement | Version |
+| ----------- | ------- |
+| Node.js | ≥ 20 |
+| pnpm | 11.x |
+| Cloudflare account | Workers + D1 + KV + R2 |
+
+Install pnpm if you do not have it:
+
+```bash
+corepack enable pnpm
+# or
+npm install -g pnpm
+```
+
+## Install the CLI
+
+```bash
+pnpm add -g @hamolus/cli
+```
+
+Or use it without a global install:
+
+```bash
+npx @hamolus/cli
+```
+
+Verify:
+
+```bash
+hamolus --help
+```
+
+## Scaffold a project
+
+### Interactive
+
+```bash
+npm create hamolus@latest
+```
+
+This asks twelve questions and then builds the project. Every question has a flag —
+a question whose flag you pass is not asked.
+
+### Non-interactive
+
+```bash
+hamolus create acme --core predefined --with-console --with-mcp
+```
+
+Or use the same twelve-question flow with flags:
+
+```bash
+hamolus init acme --mode centralized --land acme --with-console --with-mcp --with-site nextjs
+```
+
+### Core modes
+
+| Flag | Mode | Use when |
+| ---- | ---- | -------- |
+| `--core basic` | `independent` | Single-tenant, simplest setup. Default for most projects. |
+| `--core predefined` | `centralized` | Multi-tenant; includes predefined collections. |
+
+`CORE_MODE` values: `independent`, `centralized`, `proxy`, `bridge`. Only
+`independent` typically sets `PUBLIC_GETS=true`.
+
+## Install dependencies
+
+```bash
+cd acme
+pnpm install
+```
+
+This installs workspace packages for core, console, panels and mcp (whichever
+parts you included).
+
+## Add more parts later
+
+Every part can be added after the initial scaffold:
+
+```bash
+hamolus add console          # admin SPA
+hamolus add panel analytics  # panel app at panels/analytics
+hamolus add mcp              # MCP server
+hamolus add plugin todo      # console plugin
+hamolus add seed             # seed script
+hamolus add configuration staging  # wrangler preset at configs/staging
+hamolus add site astro       # public site scaffold
+```
+
+List what is already in the project:
+
+```bash
+hamolus list
+```
+
+## Environment secrets
+
+Secrets are set with Wrangler, not committed to the repo:
+
+```bash
+cd core
+npx wrangler secret put JWT_SECRET
+npx wrangler secret put ADMIN_KEY
+npx wrangler secret put PANEL_ASSET_SECRET
+npx wrangler secret put SUPER_ADMIN_USERNAME
+npx wrangler secret put SUPER_ADMIN_PASSWORD
+```
+
+| Secret | Purpose |
+| ------ | ------- |
+| `JWT_SECRET` | Signs session JWTs (HS256) |
+| `ADMIN_KEY` | Exchanges for an all-access token via `POST /api/_auth/token` |
+| `PANEL_ASSET_SECRET` | HMAC for private panel asset URLs (falls back to `JWT_SECRET`) |
+| `SUPER_ADMIN_USERNAME` / `SUPER_ADMIN_PASSWORD` | Bootstrap super-admin when `_auth_super` is empty |
+
+Vars declared in `wrangler.jsonc` (not secrets): `CORE_MODE`, `DEFAULT_LAND`,
+`DEFAULT_COLONY`, `PUBLIC_GETS`.
+
+## Next
+
+Continue to the [Quick Start](/getting-started/quick-start/).

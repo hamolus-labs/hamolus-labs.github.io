@@ -1,0 +1,112 @@
+---
+title: Panel apps
+description: The Hamolus panel examples — seo-dashboard, inventory and booking-kalendar — SolidJS apps on @hamolus/panel, their manifests, the token they need, and how to run each one.
+---
+
+The **panel examples** are authenticated internal tools built on
+[`@hamolus/panel`](/panels/): SolidJS apps whose screens are defined by a
+**panel manifest on the core**, and whose access is the ACL of that manifest —
+per role, per view, per operation. Unlike public sites, a panel always needs a
+token.
+
+| Example | Port | Shows |
+| --- | --- | --- |
+| [seo-dashboard](https://github.com/hamolus-labs/hamolus/tree/main/examples/panels/seo-dashboard) | 5173 | A `dashboard` view with metrics + a `table` view |
+| [inventory](https://github.com/hamolus-labs/hamolus/tree/main/examples/panels/inventory) | 5174 | Writing through a view, optimistic update with rollback |
+| [booking-kalendar](https://github.com/hamolus-labs/hamolus/tree/main/examples/panels/booking-kalendar) | 5175 | Grouping by date, core-owned locales, private assets |
+
+## seo-dashboard
+
+A dashboard over the `articles` collection. One `createPanelClient()` backs
+everything: `bootstrap(panelId)` reads the views, readable fields and allowed
+operations straight from the manifest (the panel never defines its own access);
+`getDashboardMetrics(panelId, viewId)` feeds the overview; `listRecords(panelId,
+viewId, query)` feeds the table, including `search`. Requests are cancelled via
+`AbortController` so a fast typer never renders a stale result, and a failing
+`getLocalization()` does not take the panel down.
+
+Needs a panel manifest with `id: 'seo'`, a `dashboard` view (`id: 'overview'`)
+with `count` metrics (e.g. `total` and `missing`, the latter filtered on
+`meta_description = ""`), a `table` view (`id: 'articles'`) on the `articles`
+collection with read/write field allowlists and a role that may `read`. Field
+names in the manifest must match the collection exactly.
+
+## inventory
+
+A warehouse stock panel that **writes through a view**:
+`updateRecord(panelId, viewId, recordId, input)` — the core answers with the
+final record, because it may fill derived fields (`updated_at`, `updated_by`).
+The example shows optimistic updates with rollback, per-row errors (a failing
+row does not empty the table), a `saving()` guard against double-clicks, and a
+"Writable: …" hint derived from `fields.write`.
+
+Needs a panel manifest with `id: 'inventory'`, a `table` view on a `products`
+collection (`read: ["sku", "name", "quantity"]`, `write: ["quantity"]`) and a
+role with `operations: ["read", "update"]`. Without `quantity` in
+`fields.write`, the input stays locked — that is correct behaviour, not a bug.
+
+## booking-kalendar
+
+A booking agenda grouped by date, in the core's own locales.
+`getLocalization()` is read once and the resolved `locale` is sent on every
+`listRecords` — the panel never sends a language the core does not declare.
+Client-side filtering only runs over the records the server returned
+(`pageSize: 50`), grouped by date in a memo. Private assets are handled through
+**signed URLs**: `listAssets()` returns `url` + `expiresAt`; the example picks
+a display/download URL and refreshes expired links (via
+`getPanelAssetUrl()` / `isPanelAssetExpired()`), without a reload.
+
+Needs a panel manifest with `id: 'booking'`, a `table` view on a `bookings`
+collection (`booked_at, booked_date, customer_name, status, attachment`) and,
+for multi-language, localization enabled on the core with the localized fields
+filled in.
+
+## The token
+
+Panels authenticate with a **panel token**, not a browser login. Get one from
+the core's login endpoint — the account must hold the right role for the
+panel's views:
+
+```bash
+curl -s http://localhost:8787/api/_auth/login \
+  -H 'content-type: application/json' \
+  -d '{"username":"admin","password":"..."}' | jq -r .data.token
+```
+
+(A panel key created in the console works too.) The token goes into
+`.env.local` as `VITE_PANEL_API_TOKEN`. When it is empty the panel shows a
+friendly message instead of throwing a raw error.
+
+## Running a panel example
+
+```bash
+# 1. the core, in another terminal (http://localhost:8787)
+cd /path/to/acme && pnpm dev
+
+# 2. the panel
+cd examples/panels/seo-dashboard
+cp .env.example .env.local     # fill VITE_PANEL_API_TOKEN
+pnpm install
+pnpm dev                       # http://localhost:5173
+```
+
+Configured through `.env.local`:
+
+| Env var | Meaning |
+| --- | --- |
+| `VITE_PANEL_API_URL` | Core origin; `/api` is appended automatically |
+| `VITE_PANEL_API_TOKEN` | **Required** — the panel token |
+| `VITE_PANEL_LAND`, `VITE_PANEL_COLONY` | Optional; if set, must match the token's scope or the core rejects with `SCOPE_MISMATCH` |
+| `VITE_PANEL_DEFAULT_VIEW` | Optional; fallback to the first menu entry |
+| `VITE_PANEL_LOCALE` | Optional; only the first request — the final locale list comes from `GET /_meta/localization` |
+
+## Rules the examples follow
+
+- **The panel never decides access.** Visible fields, allowed operations and
+  views all come from the core manifest; the client only renders what it is
+  told.
+- **Never commit the token.** It lives in `.env.local` only.
+- **Superseded requests are aborted** (`AbortController`) so a new search does
+  not land behind an old one.
+- No direct writes to `@hamolus/core` — it is a Worker, not an SDK; all panel
+  traffic goes through `@hamolus/panel`.

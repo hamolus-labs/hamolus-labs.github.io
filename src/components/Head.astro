@@ -1,0 +1,203 @@
+---
+import Default from '@astrojs/starlight/components/Head.astro';
+import versionData from '../data/version.json';
+
+const VERSION = String(versionData.version).replace(/^v/, '');
+
+// Komponen override Head tidak menerima props — data route Starlight
+// dibaca dari Astro.locals.starlightRoute (pola yang dipakai Head.astro asli).
+const route = Astro.locals.starlightRoute;
+// Buang og:type bawaan Starlight ("article" untuk semua docs) supaya tidak
+// ganda — kita yang menetapkan nilai per-halaman di bawah.
+if (Array.isArray(route.head)) {
+  route.head = route.head.filter(
+    (h) => !(h.tag === 'meta' && h.attrs?.property === 'og:type'),
+  );
+}
+const entry = route.entry;
+const title = entry?.data?.title || route.title ? `${entry?.data?.title || route.title} · Hamolus Docs` : 'Hamolus Docs';
+const description =
+  entry?.data?.description ??
+  route.description ??
+  'A headless data platform on Cloudflare Workers. Define collections, get a multi-tenant API, console, panels and AI tooling.';
+const site = (Astro.site ?? 'https://hamolus-labs.github.io').href.replace(/\/$/, '');
+const canonical = new URL(Astro.url.pathname, site).href;
+const pageUrl = canonical;
+
+/** Section label per slug level-1 — jaga selaras dengan sidebar di astro.config.mjs. */
+const SECTION_LABELS: Record<string, string> = {
+  'getting-started': 'Getting Started',
+  concepts: 'Concepts',
+  core: 'Core',
+  fields: 'Field Definition',
+  console: 'Console',
+  panels: 'Panels',
+  plugins: 'Plugins',
+  mcp: 'MCP',
+  api: 'API Reference',
+};
+
+/** Breadcrumb dari pathname: `/core/settings/` → Home › Core › KV Settings. */
+const slug = Astro.url.pathname.replace(/^\/|\/$/g, '');
+const segments = slug ? slug.split('/') : [];
+const breadcrumbItems = [
+  { name: 'Home', item: `${site}/`, position: 1 },
+  ...segments.slice(0, -1).map((seg, i) => {
+    const pos = i + 1;
+    return {
+      name: SECTION_LABELS[seg] ?? seg.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+      item: `${site}/${segments.slice(0, pos).join('/')}/`,
+      position: pos + 1,
+    };
+  }),
+];
+// Homepage cukup berbasis "Home" saja — title halaman adalah Hamolus/duplikat.
+if (entry?.data?.title && slug) {
+  breadcrumbItems.push({
+    name: entry.data.title,
+    item: pageUrl,
+    position: breadcrumbItems.length + 1,
+  });
+}
+
+const jsonLd = {
+  '@context': 'https://schema.org',
+  '@graph': [
+    {
+      '@type': 'Organization',
+      '@id': `${site}/#org`,
+      name: 'Hamolus',
+      url: `${site}/`,
+      logo: { '@type': 'ImageObject', url: `${site}/favicon.svg` },
+      sameAs: ['https://github.com/hamolus-labs/hamolus'],
+    },
+    {
+      '@type': 'WebSite',
+      '@id': `${site}/#website`,
+      name: 'Hamolus Docs',
+      url: `${site}/`,
+      description:
+        'A headless data platform on Cloudflare Workers with dynamic collections, multi-tenant API, console, panels and MCP tooling.',
+      inLanguage: 'en',
+      publisher: { '@id': `${site}/#org` },
+    },
+    {
+      '@type': 'SoftwareApplication',
+      '@id': `${site}/#software`,
+      name: 'Hamolus',
+      applicationCategory: 'DeveloperApplication',
+      operatingSystem: 'Cloudflare Workers',
+      url: `${site}/`,
+      description:
+        'Headless data platform: describe a collection as metadata, get D1 tables, scoped CRUD API, admin console, panels and MCP.',
+      publisher: { '@id': `${site}/#org` },
+    },
+    {
+      '@type': 'BreadcrumbList',
+      '@id': `${pageUrl}#breadcrumb`,
+      itemListElement: breadcrumbItems.map(({ name, item, position }) => ({
+        '@type': 'ListItem',
+        position,
+        name,
+        item,
+      })),
+    },
+    // Semua halaman (home & docs) dinyatakan sebagai WebPage — jujur dan valid:
+    // Article/TechArticle mensyaratkan datePublished yang tidak kita miliki,
+    // jadi memaksanya di sini sama saja mengarang tanggal.
+    {
+      '@type': 'WebPage',
+      '@id': canonical,
+      name: title,
+      description,
+      url: pageUrl,
+      inLanguage: 'en',
+      isPartOf: { '@id': `${site}/#website` },
+      publisher: { '@id': `${site}/#org` },
+      breadcrumb: { '@id': `${pageUrl}#breadcrumb` },
+    },
+  ],
+};
+// Selaras dengan WebPage → semua halaman bertipe og:website (bukan article).
+const ogType = 'website';
+---
+
+<Default {...Astro.props} />
+<meta name="hamolus:version" content={VERSION} />
+<meta name="theme-color" content="#0a1420" media="(prefers-color-scheme: dark)" />
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content={title} />
+<meta name="twitter:description" content={description} />
+<meta name="twitter:image" content={`${site}/og.png`} />
+<meta property="og:site_name" content="Hamolus Docs" />
+<meta property="og:type" content={ogType} />
+<meta property="og:url" content={pageUrl} />
+<meta property="og:image" content={`${site}/og.png`} />
+<meta property="og:image:alt" content="Hamolus — headless data platform on Cloudflare Workers" />
+<script type="application/ld+json" set:html={JSON.stringify(jsonLd)} />
+<script is:inline>
+  // Sidebar kiri AUTO-HIDE pada desktop: scroll turun (delta > 40px)
+  // menyembunyikan sidebar dan memberi ruang baca penuh; scroll naik
+  // memunculkannya kembali. Dekat puncak halaman selalu terlihat.
+  (() => {
+    if (!matchMedia('(min-width: 50em)').matches) return;
+    const html = document.documentElement;
+    let lastY = window.scrollY;
+    let ticking = false;
+
+    const update = () => {
+      ticking = false;
+      const y = window.scrollY;
+      const delta = y - lastY;
+      lastY = y;
+
+      if (y < 96) {
+        html.removeAttribute('data-nav-hidden');
+        return;
+      }
+
+      if (delta > 40) {
+        html.setAttribute('data-nav-hidden', '');
+      } else if (delta < -40) {
+        html.removeAttribute('data-nav-hidden');
+      }
+    };
+
+    window.addEventListener(
+      'scroll',
+      () => {
+        if (!ticking) {
+          ticking = true;
+          requestAnimationFrame(update);
+        }
+      },
+      { passive: true },
+    );
+  })();
+</script>
+<script is:inline>
+  // Badge versi di header (samping brand) yang menautkan ke changelog.
+  (() => {
+    const mount = () => {
+      const version = document
+        .querySelector("meta[name='hamolus:version']")
+        ?.getAttribute('content');
+      if (!version) return;
+      const title = document.querySelector('.title-wrapper .site-title');
+      if (title && !document.querySelector('.version-badge')) {
+        const badge = document.createElement('a');
+        badge.className = 'version-badge';
+        badge.href = '/community/changelog/';
+        badge.title = `Latest Hamolus release — v${version}`;
+        badge.textContent = `v${version}`;
+        title.after(badge);
+      }
+    };
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', mount);
+    } else {
+      mount();
+    }
+  })();
+</script>

@@ -1,0 +1,107 @@
+---
+title: Hamolus
+description: A headless data platform on Cloudflare Workers.
+template: splash
+hero:
+  tagline: Describe a collection as metadata. Hamolus creates the D1 table, serves a multi-tenant CRUD API, and generates the admin console, panels and AI tooling around it.
+  actions:
+    - text: Get Started
+      link: /getting-started/
+      icon: right-arrow
+    - text: Learn the vocabulary
+      link: /concepts/
+      icon: open-book
+      variant: minimal
+    - text: View on GitHub
+      link: https://github.com/hamolus-labs/hamolus
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## What is Hamolus?
+
+There is no application to fork. A Hamolus project is **assembled from parts** — a
+core API worker, an admin console, panel apps, an MCP server for AI agents, seeds
+and deployment presets.
+
+<CardGrid stagger>
+  <Card title="Core" icon="setting">
+    A Hono API worker on Cloudflare Workers. Owns D1, KV, R2, auth, scope
+    resolution and the metadata layer that makes collections dynamic.
+  </Card>
+  <Card title="Console" icon="puzzle">
+    A SolidJS + StyleX admin SPA. Reads collection and panel metadata from the
+    core — it is never rewritten by your project.
+  </Card>
+  <Card title="Panels" icon="list-format">
+    Data-driven app surfaces generated from panel manifests, served with a typed
+    client library and private asset URLs.
+  </Card>
+  <Card title="MCP" icon="rocket">
+    A Model Context Protocol server for AI agents. Console-managed instances,
+    per-user tokens, 42 static tools across four groups.
+  </Card>
+</CardGrid>
+
+## Start with the vocabulary
+
+Hamolus has a small domain language. Learn it once and the rest of the platform
+reads naturally.
+
+<CardGrid>
+  <Card title="Universe, Land & Colony" icon="globe">
+    The multi-tenancy ladder: global plane → tenant → optional sub-unit.
+    Ids, headers, registry and the console Universe page.
+  </Card>
+  <Card title="Collections & Records" icon="database">
+    Schema as metadata, D1 tables created at runtime, scoped CRUD on
+    `/api/:collection`.
+  </Card>
+  <Card title="Field Definition" icon="puzzle">
+    19 field types, every parameter, and exactly how each one appears in the
+    admin panel.
+  </Card>
+  <Card title="Permissions" icon="key">
+    20 permissions × privilege scopes. What each built-in role can do — and
+    what it cannot.
+  </Card>
+</CardGrid>
+
+## Documentation map
+
+| Section | Covers |
+| ------- | ------ |
+| [Getting Started](/getting-started/) | Installation, quick start, configuration surfaces |
+| [Examples](/examples/) | Astro & Next.js sites, a Flutter app, panel apps and a console — how a frontend reads a core |
+| [Concepts](/concepts/) | Vocabulary — universe, land, colony, collection, field, panel, roles |
+| [Core](/core/) | Architecture, collections API, multi-tenancy |
+| [Field Definition](/fields/) | Parameters, all 19 types, console FieldEditor & RecordForm |
+| [Console](/console/) | Admin app + building collections walkthrough |
+| [Panels](/panels/) | Manifests, view kinds, ACL, bootstrap endpoint |
+| [Plugins](/plugins/) | Console plugins, KV storage, the plugin contract |
+| [MCP](/mcp/) | Instance model, tokens, tool groups, wiring an agent |
+| [API Reference](/api/) | REST endpoints + permissions & roles |
+| [Community](/community/contributing/) | Contributing guide & full release changelog |
+
+## Built in the open
+
+Hamolus lives at **github.com/hamolus-labs/hamolus**. The project is
+documentation-driven — our docs are eaten as much as they are read — so a
+correction or a walkthrough is a contribution worth as much as a feature.
+
+<CardGrid stagger>
+  <Card title="Source code" icon="github">
+    Browse the monorepo — CLI, core Worker, console, panel client, MCP server,
+    templates and the documentation set, all in one repository.
+  </Card>
+  <Card title="Contributing" icon="open-book">
+    How to set up a dev environment, which gates your change must pass, and the
+    conventions for docs, commits and pull requests.
+  </Card>
+  <Card title="Changelog" icon="list-format">
+    Every change, release by release — features, fixes, deprecations and the
+    decisions behind them.
+  </Card>
+</CardGrid>

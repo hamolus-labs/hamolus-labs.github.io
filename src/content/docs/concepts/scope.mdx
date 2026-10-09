@@ -1,0 +1,195 @@
+---
+title: Universe, Land & Colony
+description: How Hamolus multi-tenancy works — the scope ladder, ids, headers, registry and console Universe page.
+---
+
+Hamolus is multi-tenant by construction. Three words describe the whole model:
+
+| Term | What it is | Example id |
+| ---- | ---------- | ---------- |
+| **Universe** | The global plane — not a tenant | *(no id; it is the root of privilege scope)* |
+| **Land** | Top tenant unit | `acme_lnd`, `root_lnd` |
+| **Colony** | Optional sub-unit under a land | `marketing_cny`, `root_cny` |
+
+```
+universe
+  └── land acme_lnd
+        ├── colony default_cny      ← or root_cny
+        └── colony store_cny
+  └── land beta_lnd
+        └── (no colonies — data sits on the land's root colony)
+```
+
+## Why universe exists
+
+Not everything belongs to a tenant. Creating lands, listing colonies, managing
+super-admins and platform privileges are **global** operations. Those endpoints
+live under:
+
+```
+/api/_meta/universe/lands
+/api/_meta/universe/colonies
+```
+
+and ignore `x-land` / `x-colony`. A privilege with `scope: 'universe'`
+(super-admin) can touch them; a land admin cannot reach the registry of other
+lands.
+
+## Ids and naming
+
+| Rule | Value |
+| ---- | ----- |
+| Land suffix | `_lnd` |
+| Colony suffix | `_cny` |
+| Root land | `root_lnd` |
+| Root colony | `root_cny` |
+| Name pattern | `^[a-z][a-z0-9_]{0,39}$` (snake_case, 2–40 chars) |
+| Reserved words | `root`, `default` — cannot be used as user-chosen names |
+| Forbidden in names | `__` (double underscore is the physical table separator) |
+
+Helpers in `@hamolus/types`:
+
+```ts
+landIdFor('acme')        // 'acme_lnd'
+colonyIdFor('store')     // 'store_cny'
+normalizeLandId('default')  // 'root_lnd'  (sentinel)
+normalizeColonyId('')       // 'root_cny'
+```
+
+`DEFAULT_LAND` / `DEFAULT_COLONY` Wrangler vars use the same rule: the literal
+string `default` is a **sentinel** that resolves to `root_lnd` / `root_cny`.
+
+## How a request picks its scope
+
+Resolution order inside the core (`resolveRequestScope`):
+
+1. **`proxy` / `bridge` mode** — scope comes from the upstream; headers ignored.
+2. **Header `x-colony` / `x-land`** — if present, validated against the registry.
+3. **JWT claims** — `land` / `colony` baked into the session token.
+4. **Mode `centralized` without any of the above** → `400 SCOPE_REQUIRED`
+   (except global paths).
+5. **Mode `independent`** — falls back to `DEFAULT_LAND` / `DEFAULT_COLONY`
+   (or root). Land/colony layer effectively off.
+
+Additional guards:
+
+| Check | Error |
+| ----- | ----- |
+| Id format invalid (missing suffix, reserved base) | `INVALID_LAND` / `INVALID_COLONY` |
+| Colony not in registry | `404 UNKNOWN_COLONY` |
+| Colony belongs to another land | `400 SCOPE_MISMATCH` |
+| JWT land ≠ request land | `403 SCOPE_MISMATCH` |
+
+Unknown lands/colonies **never mint privileges** — a request that names a
+nonexistent scope fails closed.
+
+### Path rewrite (optional)
+
+Before auth, the core can rewrite:
+
+```
+/api/{land}[/{colony}]/…   →   /api/…  + x-land/x-colony headers
+```
+
+Only when `{land}` is a registered land id, not a built-in `_`-prefixed path,
+not a collection name that collides, and not in `proxy`/`bridge` mode.
+
+## Registry tables
+
+Global (not scope-scoped):
+
+| Table | Row |
+| ----- | --- |
+| `_meta_lands` | land id, label, description, owner, timestamps |
+| `_meta_colonies` | colony id, parent land id, label, description, timestamps |
+
+Root `root_lnd` + `root_cny` always exist. Deleting a land cascade-deletes its
+colonies, collections, records, media, files, panels and panel assets — the
+console confirm dialog says so explicitly.
+
+### API
+
+```
+GET|PUT|DELETE /api/_meta/universe/lands[/:id]
+GET|PUT|DELETE /api/_meta/universe/colonies[/:id]
+```
+
+Authorization:
+
+| Actor | Can |
+| ----- | --- |
+| Super-admin (`scope: 'universe'`) or legacy `ADMIN_KEY` session | read/write all lands & colonies |
+| `land_admin` | read own land; create/delete colonies inside it |
+| Colony admin | no registry access |
+
+## Privilege scopes
+
+```
+PRIVILEGE_SCOPES = ['universe', 'land', 'colony']
+```
+
+| Built-in role | Scope | Typical use |
+| ------------- | ----- | ----------- |
+| *(super-admin)* | universe | Platform operator |
+| `land_admin` | land | Tenant owner |
+| `admin` | colony | Colony manager |
+| `manager` / `editor` / `viewer` | colony | Day-to-day content ops |
+| `panel_user` | colony | Panel-only access |
+
+A privilege's **reach follows its scope**, never its name. The default colony
+role is called `admin`, but `role === 'admin'` must not hand every colony admin
+the whole platform — the core checks `privilege.scope`.
+
+## Console — the Universe page
+
+Path: **Universe** in the admin sidebar. Requires `lands.read` / `colonies.read`
+to view; write buttons gate on `lands.write` / `colonies.write`.
+
+### Sections
+
+1. **Lands** — table: Land id · Label · Description · Colonies count.
+   - Pill badge on the default land.
+   - Edit / Delete per row. Delete is disabled for the default land.
+   - Confirm text: *"All its collections, records, media and users will be removed."*
+
+2. **Colonies** — table: Land · Colony id · Label · Description.
+   - "New colony" opens a sheet with Land select + Colony id + Label + Description.
+
+3. **Super admins** — only visible when the session has `scope: 'universe'`.
+   - Setup banner when no super exists yet.
+   - Username, display name, password (min 8 on create), account-active toggle.
+   - Self-delete and self-disable are blocked.
+
+### Sheets (drawer forms)
+
+| Sheet | Fields |
+| ----- | ------ |
+| New land | Land id *(snake_case, min 2, only on create)* · Label · Description |
+| New colony | Land *(select)* · Colony id *(on create)* · Label · Description |
+| Super admin | Username · Display name · Password · Account active |
+
+Every submit logs activity and invalidates the related queries.
+
+## CORE_MODE cheat-sheet
+
+| Mode | Headers | Default scope | `PUBLIC_GETS` |
+| ---- | ------- | ------------- | ------------- |
+| `independent` | optional | `DEFAULT_LAND`/`DEFAULT_COLONY` or root | typically `true` |
+| `centralized` | required on scoped routes | none — must be explicit | `false` |
+| `proxy` | ignored (upstream decides) | upstream | `false` |
+| `bridge` | ignored | upstream | `false` |
+
+## Common pitfalls
+
+1. **Using `default` as a land name** — reserved; it means "use root".
+2. **Forgetting `x-colony` on a centralized core** — every scoped call 400s.
+3. **Assuming colony admin can list all colonies** — registry is super/land admin only.
+4. **`PUBLIC_GETS=true` on multi-tenant cores** — every site example breaks the
+   isolation model; keep it off.
+5. **JWT from land A used against land B** — `403 SCOPE_MISMATCH` by design.
+
+## Next
+
+- [Multi-tenancy API](/core/multi-tenancy/)
+- [Permissions & Roles](/api/permissions/)
+- [Collections & Records](/concepts/collections/)

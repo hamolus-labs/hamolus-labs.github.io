@@ -1,0 +1,162 @@
+---
+title: "AI skills for agents"
+description: The Hamolus agentic skills shipped in the monorepo — what each one is for, the keywords that activate it, and the rules it enforces.
+---
+
+Hamolus ships a set of **agent skills** (SKILL.md files under `utils/hamolus-*` in
+the monorepo) that give AI assistants the exact rules for a task — the same rules a
+human would look up in `docs/definitions/*`. Each skill is load-on-demand: an agent
+front-loads its description, and the keyword matter decides which skill applies to a
+given request.
+
+## The seven skills at a glance
+
+| Skill | For | Activates on… |
+| --- | --- | --- |
+| `hamolus-scaffold` | creating or extending a project with the CLI | `hamolus create`, `hamolus add …`, new project |
+| `hamolus-collections` | collection definitions (in code or over HTTP) | create/add/define collection, `collectionDefinitionSchema`, `_meta_collections` |
+| `hamolus-fields` | field definitions inside a collection | field type, localized, relation, currency |
+| `hamolus-panels` | panel manifests (table/form/dashboard) | panel definition, `PanelDefinition`, bootstrap |
+| `hamolus-config` | project configuration surfaces | `core.config.ts`, KV settings, config entry, `PUBLIC_GETS` |
+| `hamolus-seed` | seed scripts that populate a core | seed, populate core, demo data, `DRY_RUN` |
+| `hamolus-verify` | choosing gates after a change | `pnpm check:*`, "is it green", gate failure |
+
+Pick the skill for the smallest surface you touch — a request about one field uses
+`hamolus-fields`, not `hamolus-collections` and `hamolus-panels` together.
+
+## hamolus-scaffold
+
+Create and extend projects with the `hamolus` CLI, which is zero-runtime-dependency
+and template-driven. The gotchas are about *where* it runs and *what* it rewrites.
+
+- **Project root first.** Every command walks up to `hamolus.json`; a directory
+  without one is rejected before any manifest is read, so the CLI never runs from the
+  Hamolus repository root itself.
+- **`--core` and `--mode` are independent axes.** `--core basic|predefined` changes
+  the *schema* (predefined ships a code-defined `posts` collection + `content`
+  panel); `--mode independent|centralized|proxy|bridge` changes the *scope model*.
+- **`--output` is relative to the project root**, and part names are `snake_case`.
+- **`hamolus add plugin` edits between markers.** It appends to the `plugins` array
+  between `/* hamolus:plugins:start */` and `:end */` and inserts its import between
+  the `imports` markers. Removing a marker makes the command fail loudly — that is
+  designed, not a bug to bypass.
+- **A new package part needs a workspace glob** declared inside the `packages:`
+  block of `pnpm-workspace.yaml`.
+- **`--dry-run` first** for anything destructive; it prints the plan and writes
+  nothing.
+
+See [Quick Start](/getting-started/quick-start/) and [Deploying](/getting-started/deploying/)
+for the project shapes the CLI produces.
+
+## hamolus-collections
+
+Create and validate collection definitions. A collection is metadata
+(`_meta_collections`) plus a scoped D1 table.
+
+- **Name**: `^[a-z][a-z0-9_]*$`, snake_case, no reserved suffixes.
+- **PK** defaults to `id`; it is synthesized, so do not list it in `fields` unless
+  explicitly declared.
+- **PUT migrates, never drops.** Adding a field adds a column; renames, retypes and
+  drops are manual migrations — state this in any explanation.
+- **Code-defined** collections live in `core/src/collections/*.ts`, exported through
+  the barrel and wired with `setCodeDefinitions()`. They are frozen against runtime
+  `PUT/DELETE` (`403 CODE_DEFINED_COLLECTION`) but their records stay editable.
+- **Validation is strict**: `collectionDefinitionSchema` rejects unknown keys.
+
+See [Collections API](/core/collections/) for the runtime surface.
+
+## hamolus-fields
+
+Field definitions inside a collection. A field is part of a collection's `fields`
+array only.
+
+- **19 types**: `id, string, slug, text, richtext, number, currency, custom_currency,
+  boolean, date, datetime, enum, json, email, url, relation, media, document,
+  attachment`.
+- **Storage**: `number/currency/custom_currency` → `NUMERIC`; `boolean` → `INTEGER`;
+  everything else (including `json`, media snapshots and `enum[]`) → `TEXT`.
+- **`localized`** only on `text, string, slug, email, url, richtext`; `control` only
+  on `boolean, enum, relation`; `format` only on `richtext`.
+- **`relation`** is metadata only — no FK enforcement. `kind` defaults to `belongsTo`.
+- **Money**: `currency` stores the NUMERIC base and reads back as
+  `{ base, currency, display }`; `custom_currency` adds a presenter block.
+
+See [Field Types](/fields/types/) for per-type validation rules.
+
+## hamolus-panels
+
+Panel manifests. The core enforces the manifest; the client renders it; the runtime
+serves a bootstrap-filtered manifest per member.
+
+- **Required root**: `views[]` (≥ 1) and `roles[]` (≥ 1); `defaultRoleId` must exist.
+- **`fields.read` / `fields.write` are explicit allowlists** — no `all`, 200 each.
+- **Operations are subsets**: role operations ⊆ view operations, role read/write
+  fields ⊆ view fields.
+- **Kinds**: `table` and `form` reference a `collection`; `dashboard` needs `metrics[]`
+  of `count`/`sum`/… on `number|currency|custom_currency` fields (or an id for `count`).
+- **Filters** carry `op` and **exactly one** of `value` or `source` (a member attribute
+  path); `op: 'in'` requires a static array.
+- **Reference validation** (`PANEL_REFERENCE_INVALID`) checks collections, fields,
+  menu refs, subsets and duplicates against the live schema.
+
+See [Panel Definition](/panels/definition/) for the full manifest.
+
+## hamolus-config
+
+Place a value on the right surface. The decision rule:
+**needs a PR → file · no deploy → KV/config entry · credential/binding → Wrangler.**
+
+| Surface | Needs deploy | Holds |
+| --- | --- | --- |
+| `core.config.ts` | yes | strict; today only `localization` |
+| `console.config.ts` | yes | strict; exactly one property — `plugins` |
+| KV settings (`settings:{land}:{colony}:v1`) | no | free-form JSON; the only key the core reads is `localization` |
+| Config entries (`_configs` via `/_config/{key}`) | no | `configEntrySchema`, one row per `(land, colony, key)` |
+| Wrangler vars/secrets | redeploy | secrets (`JWT_SECRET`, `ADMIN_KEY`, …) vs vars (`PUBLIC_GETS`, `CORE_MODE`, …) |
+
+The only overlap is localization: `core.config.ts` declares
+`defaultLocale` + `locales[]`, and the KV `localization` object **wins outright** over
+the file. Do **not** put localization in `console.config.ts` — the strict schema
+rejects it.
+
+See [KV Settings](/core/settings/) for read-back shapes.
+
+## hamolus-seed
+
+Seed scripts populate a core with representative data. They are **plain Node scripts**
+(no build, no deps, just `fetch`), self-cleaning and scoped to what they own.
+
+- Author via `hamolus add seed <snake_case_name>`; the CLI writes the script, a README
+  and a manifest.
+- Auth: mint a short-lived token from `ADMIN_KEY` (`POST /_auth/token`) and send it as
+  `Bearer` on every call.
+- **Self-cleaning**: delete the collections/media this seed owns before creating, so a
+  re-run does not duplicate. Never truncate tables manually.
+- **Skip code-defined collections**: a `PUT` on one returns `403 CODE_DEFINED_COLLECTION`
+  — insert records only.
+- `DRY_RUN=1` prints the intended writes and changes nothing. `pnpm typecheck` is a
+  free `node --check` syntax gate — run it before pointing the seed at a real core.
+
+## hamolus-verify
+
+Pick the right gates for the change and read a failure correctly, from the repository
+root. **Offline gates** (no core needed): `pnpm typecheck`, `pnpm build`,
+`check:markers`, `check:copyright`, `check:code-definitions`, `check:localization`,
+`check:workspace-glob`, `check:panel-runtime`, and `check:plugin-config` (via
+`pnpm -F @hamolus/cli`). **Live gates** (need a core on `127.0.0.1:8787`):
+`check:panel-acl`, `check:mcp-instance-acl`, `check:scope-colony-resolution`,
+`check:localization-api`, `check:code-defined-core`, `check:generated-app`.
+
+Two things are easy to misread:
+
+- **Build order matters.** `@hamolus/types` must be built first — other packages
+  resolve it through `dist`. A stale types build produces type errors that are not
+  real; rebuild, then believe the error.
+- **Live-gate failures are environmental** when there is no running core or cold
+  pnpm store — not a regression. Verify on a clean checkout before claiming one.
+
+The **deploy-repository gate** (`scripts/export-deploy-repo.mjs --check`) guards the
+generated copies in `hamolus-labs/{core,console,mcp}` that back the "Deploy to
+Cloudflare" buttons. Those copies are never edited by hand; a change to
+`packages/core`, `packages/console`, `packages/mcp` or `tsconfig.base.json`
+re-export-and-diffs them.

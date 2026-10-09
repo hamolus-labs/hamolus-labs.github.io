@@ -1,0 +1,122 @@
+---
+title: Panels
+description: Panel apps — data-driven surfaces generated from manifests.
+---
+
+**Panels** are focused data-driven apps built on top of a Hamolus collection.
+A panel is declared as a **manifest** (JSON or TypeScript); the core serves
+bootstrap, ACL, records and assets; a small browser client (`@hamolus/panel`)
+renders the app.
+
+```
+hamolus add panel analytics
+# → panels/analytics/  (Vite static app)
+```
+
+Examples in the monorepo: `examples/panels/{seo-dashboard,inventory,booking-kalendar}`.
+
+## The manifest
+
+A panel manifest declares views, filters, menu, roles and theme against a target
+collection.
+
+```jsonc
+{
+  "id": "seo_dashboard",
+  "name": "SEO Dashboard",
+  "collection": "pages",
+  "views": [ /* table | form | dashboard */ ],
+  "filters": [ /* value | source */ ],
+  "menu": [ /* navigation refs */ ],
+  "roles": { /* PanelOperation subsets */ },
+  "members": [ /* user refs */ ],
+  "theme": { /* presentation */ }
+}
+```
+
+| Concept | Notes |
+| ------- | ----- |
+| View kinds | `table`, `form`, `dashboard` |
+| Field ACL | Per-view, per-field `PanelFieldAccess` |
+| Operations | Role operations are a **subset** — not a free-for-all |
+| Filters | `value` vs `source` kinds |
+| Metrics | `PanelMetricDefinition` on dashboard views |
+| Referential validation | Invalid refs → `PANEL_REFERENCE_INVALID` |
+
+Full property reference: [Panel Definition](/panels/definition/).
+
+## Endpoints
+
+```
+GET    /api/_panels                                  panels.read
+POST   /api/_panels                                  panels.write
+GET    /api/_panels/:id                              panels.read
+POST   /api/_panels/:id                              panels.write
+PUT    /api/_panels/:id   PATCH /api/_panels/:id     panels.write
+DELETE /api/_panels/:id                              panels.write
+GET    /api/_panels/:id/bootstrap
+GET    /api/_panels/:id/views/:viewId/assets         / POST / DELETE .../assets/:assetId
+GET    /api/_panels/:id/views/:viewId/records        / .../records/:recordId
+POST   /api/_panels/:id/views/:viewId/records        / PUT | PATCH | DELETE .../:recordId
+GET    /api/_panels/:id/views/:viewId/relations/:field/options
+GET    /api/_panels/:id/views/:viewId/dashboard
+```
+
+`GET /_panels/:id/bootstrap` is the **source of truth** for ACL at runtime —
+the client receives the effective permissions, not a guess.
+
+## Two permission models
+
+| Model | Where enforced |
+| ----- | ------------- |
+| Manifest global roles | Declarative in the manifest |
+| Runtime | Session permissions **intersected** with manifest ACL |
+
+A locked `fields.write` is enforced over HTTP, not in the UI. Gate:
+`pnpm check:panel-acl` (needs a core on `:8787`).
+
+## `@hamolus/panel` client
+
+```ts
+import { createPanelClient, createPanelRuntimeConfig } from '@hamolus/panel'
+
+const client = createPanelClient(
+  createPanelRuntimeConfig({ apiUrl, panelId, token })
+)
+```
+
+| Export | Role |
+| ------ | ---- |
+| `PanelClient` / `createPanelClient` | Typed access to bootstrap, records, dashboard |
+| `createPanelRuntimeConfig` | Runtime config factory |
+| `DEFAULT_PANEL_API_URL` | Default API base |
+| `getPanelAssetUrl` | Signed private asset URL builder |
+| `isPanelAssetExpired` | Expiry check for signed URLs |
+
+The client **requires a token**. It reads the manifest and data exclusively via
+`/api/_panels/*`.
+
+## Private assets
+
+Panel assets are served privately:
+
+```
+GET /panel-assets/:id?expires=<ts>&sig=<hmac>
+```
+
+- HMAC signed with `PANEL_ASSET_SECRET` (falls back to `JWT_SECRET`)
+- Response: `cache-control: private, max-age=300` + CSP `sandbox`
+- Public media (`/media/...`) is a different surface and needs no token
+
+## Scaffold & verification
+
+```bash
+hamolus add panel analytics
+pnpm check:panel-runtime      # offline
+pnpm check:panel-acl          # live, core on :8787
+```
+
+## Next
+
+Read [Panel Definition](/panels/definition/) for the full
+manifest schema.

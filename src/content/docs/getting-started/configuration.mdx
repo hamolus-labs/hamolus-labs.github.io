@@ -1,0 +1,170 @@
+---
+title: Configuration
+description: The five Hamolus configuration surfaces — where each value belongs.
+---
+
+Choosing the wrong configuration surface is the most common source of confusion in
+a Hamolus project. The rule is short:
+
+> **A value that should be reviewed in a pull request goes in a config file.
+> A value an operator must change without a redeploy goes in KV settings or a
+> config entry. A value that is a credential or a binding goes in Wrangler.**
+
+## The five surfaces
+
+| Surface | Location | Needs deploy | Schema |
+| ------- | -------- | ------------ | ------ |
+| `core.config.ts` | core repo root | ✅ | `coreConfigSchema` — `.strict()` |
+| `console.config.ts` | console root | ✅ | `consoleConfigSchema` — `.strict()` |
+| KV settings | Cloudflare KV `settings:{land}:{colony}:v1` | ❌ | free-form JSON |
+| Config entries | `_configs` table via `/_config/{key}` | ❌ | `configEntrySchema` — `.strict()` |
+| Wrangler vars/secrets | `wrangler.jsonc`, `configs/*/wrangler.jsonc` | redeploy | credentials vs vars |
+
+## `core.config.ts`
+
+Build-time project settings bundled into the Worker. Today it owns **localization**:
+
+```ts
+// core.config.ts
+import { defineCoreConfig } from '@hamolus/types'
+
+export const config = defineCoreConfig({
+  localization: {
+    defaultLocale: 'en',
+    locales: [
+      { code: 'en', label: 'English' },
+      { code: 'id', label: 'Bahasa Indonesia' },
+    ],
+  },
+})
+
+export default config
+```
+
+Wire it in the core entry:
+
+```ts
+// core/src/index.ts
+import app, { setCoreConfig } from '@hamolus/core'
+import { config } from '../core.config'
+
+setCoreConfig(config)
+
+export default app
+```
+
+- `.strict()` — an unknown key is an error, not a silent typo.
+- `defineCoreConfig()` validates at import time and names the file on error.
+- `defaultLocale` must be one of `locales[].code`.
+- Locale codes are BCP-47-shaped: `^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$` —
+  `en`, `id`, `pt-BR`, `zh-Hant`.
+
+## `console.config.ts`
+
+Exactly one property: `plugins`.
+
+```ts
+// console.config.ts
+import { defineConsoleConfig } from '@hamolus/types'
+import { todoPlugin } from '@hamolus/plugin-console-todo'
+
+export const config = defineConsoleConfig({ plugins: [todoPlugin] })
+export default config
+```
+
+- `defineConsoleConfig({})` is valid ("no plugins").
+- Do **not** put `localization` here — the strict schema rejects it.
+- Console locale is **never** in this file; it is read from the core at runtime.
+
+## KV settings
+
+Free-form JSON stored in Cloudflare KV. The only key the core reads today is
+`localization`. Managed from the console **Config** page or:
+
+```
+GET /api/_meta/settings
+PUT /api/_meta/settings
+```
+
+**Precedence:** for anything both `core.config.ts` and KV settings can express —
+today, only localization — **KV settings win outright** (whole object, not
+per-locale merge).
+
+```
+KV settings  ──(valid localization?)──▶ wins, whole object
+core.config.ts ─────────────────────▶ used when settings declare nothing
+default                            ─▶ used when neither does
+```
+
+Read the effective value:
+
+```
+GET /api/_meta/localization
+→ { "data": { "defaultLocale": "en", "multilingual": true, "locales": [...] } }
+```
+
+`data` is `null` when the project declares no locales.
+
+## Config entries
+
+Addressable key-value rows in the `_configs` table, one per `(land, colony, key)`.
+
+```
+GET    /api/_config
+GET    /api/_config/:key
+PUT    /api/_config/:key
+DELETE /api/_config/:key
+```
+
+- Key pattern: `^[a-z][a-z0-9._-]*$`
+- Schema: `configEntrySchema` — `.strict()`
+- Land admins targeting a colony must pass `?colony=`
+- Scope resolution follows the privilege's **scope**, never its name
+
+Use config entries for one addressable value a frontend fetches by key
+(for example `scope: 'site'` entries like site name or nav).
+
+## Wrangler vars and secrets
+
+Infrastructure, not configuration. Credentials are **secrets**:
+
+| Secret | Purpose |
+| ------ | ------- |
+| `JWT_SECRET` | Signs JWTs |
+| `ADMIN_KEY` | Legacy all-access token exchange |
+| `PANEL_ASSET_SECRET` | HMAC for panel asset URLs |
+| `SUPER_ADMIN_USERNAME` / `SUPER_ADMIN_PASSWORD` | Bootstrap super-admin |
+
+Vars (declared in `wrangler.jsonc`, intentionally not defaulted in code):
+
+| Var | Purpose |
+| --- | ------- |
+| `CORE_MODE` | `independent` \| `centralized` \| `proxy` \| `bridge` |
+| `DEFAULT_LAND` / `DEFAULT_COLONY` | Fallback scope; `default` is a reserved sentinel → `root_lnd` / `root_cny` |
+| `PUBLIC_GETS` | Allow GET endpoints without a token (`independent` mode only typically) |
+
+Per-environment overrides live in named Wrangler configurations:
+
+```bash
+hamolus add configuration staging
+# creates configs/staging/wrangler.jsonc + verify.mjs
+```
+
+## Decision test
+
+| Question | Surface |
+| -------- | ------- |
+| Locale set reviewed in a PR? | `core.config.ts` |
+| Operator adds a locale today, no redeploy? | KV `localization` |
+| Site name / nav / UI copy? | KV settings |
+| One addressable value fetched by key? | Config entry |
+| Credential or binding? | Wrangler secret / var |
+| Per-environment override? | Named Wrangler configuration |
+
+## Checklist
+
+- [ ] Value placed on the correct surface (PR vs no-deploy vs credential)
+- [ ] `core.config.ts` is strict-valid; `defaultLocale` is declared
+- [ ] `console.config.ts` has no leftover `localization` keys
+- [ ] Localized fields have locales declared somewhere (file or KV)
+- [ ] Secrets are secrets, not vars

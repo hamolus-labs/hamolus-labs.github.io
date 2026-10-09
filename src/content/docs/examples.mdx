@@ -1,0 +1,149 @@
+---
+title: Example applications
+description: Concrete Hamolus frontend implementations — Astro sites, a Next.js blog and a Flutter app — how to run each, and the rules for reading a core. Panels and console examples live on their own pages.
+---
+
+Hamolus ships **ready-to-read example applications** in the repository
+(`examples/`) that show how a real frontend consumes a Hamolus core. These are
+not template copies — they are builds produced from the CLI and trimmed to the
+parts an example needs, so they never drift from what the generator outputs.
+
+`examples/` is deliberately **not** part of the workspace:
+
+- `pnpm install` / `pnpm build` at the repository root does not touch the
+  folder; each example installs separately when you want it;
+- a breakage in one example does not fail the repository's CI.
+
+**Public frontends** (this page) and **internal UIs** are documented
+separately — jump to the [panel apps](/examples/panels/) page for the
+`@hamolus/panel` examples and the [console](/examples/console/) page for the
+plugin-holding admin console.
+
+## Frontend implementations
+
+The sites and the app are the public-facing consumers: they read collections
+straight from the core **REST API** with plain `fetch` (or `package:http` in
+Dart) — no panel package, no console.
+
+| Example | Stack | Port | Shows |
+| --- | --- | --- | --- |
+| [sites/astro/blog](https://github.com/hamolus-labs/hamolus/tree/main/examples/sites/astro/blog) | Astro, static (SSG) | 4321 | Articles at build time, Markdown, slug→id |
+| [sites/astro/corporate](https://github.com/hamolus-labs/hamolus/tree/main/examples/sites/astro/corporate) | Astro, static | 4322 | Multi-locale — URLs from core localization |
+| [sites/astro/ecommerce](https://github.com/hamolus-labs/hamolus/tree/main/examples/sites/astro/ecommerce) | Astro, static | 4323 | Catalog with filters + pagination |
+| [sites/nextjs/blog](https://github.com/hamolus-labs/hamolus/tree/main/examples/sites/nextjs/blog) | Next.js 15 App Router | 3000 | Cache + `revalidateTag`, ISR-style pages |
+| [apps/flutter/accounting](https://github.com/hamolus-labs/hamolus/tree/main/examples/apps/flutter/accounting) | Flutter (Dart) | device | Native read-only app, injectable HTTP client |
+
+### Astro blog
+
+A fully static blog whose articles are read at build time. The list is
+`GET /api/articles` with a `filter` for `status = published` and
+`sortBy=published_at&sortDir=desc`; the detail route is `GET /api/articles/{id}`
+and `getStaticPaths` bridges slug → id (the core routes by **id**, not slug). If
+the core cannot be read, the build throws an actionable error instead of
+silently producing an empty output directory.
+
+Needs an `articles` collection with a `public` view and the fields:
+`title, slug, excerpt, body, cover, tags, author_name, published_at, status`.
+
+### Astro corporate
+
+A multi-locale corporate site (profile + team pages), one URL per locale. The
+language list is read from the core's localization
+(`GET /_meta/localization`) and `getStaticPaths` iterates it — the env locale
+is only a fallback for a core that has no list yet. Needs `companies` and
+`team_members` collections; see the example README for the exact fields.
+
+### Astro ecommerce
+
+A product catalog with **filters and pagination**. Filters are passed as a JSON
+`FilterMap` (`{ status: { op: 'eq', value: 'active' }, price: { op: 'lte', value: 500000 } }`)
+with the operators `eq, neq, gt, gte, lt, lte, like, in, contains`. Pagination
+uses `meta.totalPages`, never `data.length`. Needs `products` and `categories`
+collections.
+
+### Next.js blog
+
+The same blog domain on the Next.js App Router, with the Next cache as the
+second layer: `fetch` uses `next: { revalidate, tags }`, the tag per collection
+is `hamolus:articles:published`, and a Route Handler
+(`/api/revalidate`) calls `revalidateTag()` after comparing a token in
+constant time. `dynamicParams = false` turns unknown slugs into 404s.
+
+### Flutter accounting
+
+A **read-only** accounting app (general ledger, journal entries, invoices)
+built with `package:http` — not `dart:io` — so its one implementation runs on
+desktop **and** web. `HamolusClient` accepts an `http.Client` for unit tests,
+the locale is read once at startup, pagination is driven by `meta.totalPages`,
+and models tolerate new fields from the core. Write access is deliberately
+absent: a mobile app that writes through an unauthenticated public API is a
+hole, not a feature.
+
+Needs `accounts`, `journal_entries` and `invoices` collections plus a `public`
+view named `journal`.
+
+## Running a public example
+
+Every example needs a running core first:
+
+```bash
+# from the repository root
+pnpm hamolus create acme --core predefined
+cd acme
+pnpm install
+pnpm hamolus add console
+pnpm dev            # core worker at http://localhost:8787
+```
+
+Then point an example at it. Public sites and the app use a normalised base
+URL that already ends with `/api`:
+
+| Example | Configuration |
+| --- | --- |
+| Astro sites | `cp .env.example .env` → `PUBLIC_HAMOLUS_ORIGIN=http://localhost:8787` (no `/api` — `apiBase()` adds it) |
+| Next.js | `cp .env.example .env.local` → `HAMOLUS_API_ORIGIN=http://localhost:8787` + revalidate env |
+| Flutter | no `.env` — compile-time: `flutter run --dart-define=HAMOLUS_API_ORIGIN=http://localhost:8787` |
+
+```bash
+# Astro / Next.js
+cd examples/sites/astro/blog
+pnpm install
+pnpm dev          # http://localhost:4321
+
+# Flutter (platform folders are not committed, so scaffold them first)
+cd examples/apps/flutter/accounting
+flutter create .
+flutter run --dart-define=HAMOLUS_API_ORIGIN=http://localhost:8787
+```
+
+For a physical device, the origin changes — Android emulator
+`http://10.0.2.2:8787`, or `http://mac.lan:8787` to reach the host over the LAN.
+
+## How sites and apps read a core
+
+Every public consumer follows the same contract:
+
+- **List**: `GET {API_BASE}/{collection}?page=1&pageSize=20&locale=id&filter={…}`
+  with other query options like `search`, `sortBy`, `sortDir`.
+- **Record**: `GET {API_BASE}/{collection}/{id}` returns `{ data: { … } }`.
+- **Response**: lists return `{ data, meta, lastUpdate }`; errors return
+  `{ error: { code, message } }`.
+- **Strict queries**: unused or unknown query keys are rejected
+  (`INVALID_QUERY`) — this is how the core keeps `filter` and friends honest.
+
+Two rules people most often get wrong:
+
+1. **Do not send an `Authorization` header when you have no token.** As long as
+   `PUBLIC_GETS` on the core is `true` (the default), an unauthenticated `GET`
+   passes — but the middleware demands a valid JWT as soon as `Authorization`
+   shows up, and `PUBLIC_GETS` no longer saves that request. In a core mode
+   other than `independent`, unauthenticated reads fail with `FORBIDDEN`.
+2. **Sites and apps do not use `@hamolus/panel`.** That package is bound to the
+   panel endpoints (`/api/_panels/…`) and needs a token. Public content is read
+   straight from `GET /api/{collection}`.
+
+See the [panel examples](/examples/panels/) for authenticated internal tools,
+the [console example](/examples/console/) for a plugin-holding admin app, and
+the [MCP end-to-end example](/mcp/example/) for the AI-agent counterpart. The
+examples directory map lives in
+[examples/README.md](https://github.com/hamolus-labs/hamolus/blob/main/examples/README.md).

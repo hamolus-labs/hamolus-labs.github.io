@@ -1,0 +1,358 @@
+---
+title: Field Types
+description: All 19 Hamolus field types — SQL storage, JSON value shape, type-specific parameters and console widgets.
+---
+
+Nineteen field types. Everything except `number`, `currency`, `custom_currency`
+and `boolean` is a `TEXT` column; objects and arrays are stored as JSON text.
+
+| `type` | SQL | JSON value | Localized |
+| ------ | --- | ---------- | --------- |
+| `id` | `TEXT` | `string` | |
+| `string` | `TEXT` | `string` | ✅ |
+| `slug` | `TEXT` | `string` | ✅ |
+| `text` | `TEXT` | `string` | ✅ |
+| `richtext` | `TEXT` | `string` or `{ root: … }` | ✅ |
+| `number` | `NUMERIC` | `number` | |
+| `currency` | `NUMERIC` | `number` or `{ base, currency, display }` | |
+| `custom_currency` | `NUMERIC` | `number` or `{ base, symbol, display }` | |
+| `boolean` | `INTEGER` | `boolean` | |
+| `date` | `TEXT` | `"YYYY-MM-DD"` | |
+| `datetime` | `TEXT` | ISO 8601 string | |
+| `enum` | `TEXT` | `string` or `string[]` | |
+| `json` | `TEXT` | any JSON | |
+| `email` | `TEXT` | `string` | ✅ |
+| `url` | `TEXT` | `string` | ✅ |
+| `relation` | `TEXT` | `string` or `string[]` | |
+| `media` | `TEXT` | `MediaFieldValue` | |
+| `document` | `TEXT` | `FileRefValue` | |
+| `attachment` | `TEXT` | `FileRefValue` | |
+
+---
+
+## Text-like
+
+### `string`
+
+Single-line text. Honours `minLength` / `maxLength`.
+
+| | |
+| - | - |
+| Editor params | Min length, Max length |
+| Record form | `<input type="text">` |
+| Table cell | Plain text |
+| Localized | ✅ |
+
+### `slug`
+
+URL-safe segment: `^[a-z0-9]+(?:-[a-z0-9]+)*$`. Honours length limits.
+Console auto-normalizes as you type (lowercase, digits, dashes) and shows
+"auto-normalized" help text.
+
+| | |
+| - | - |
+| Editor params | Min length, Max length |
+| Record form | Text input + normalize-on-type |
+| Typical use | `posts.slug` → `/posts/hello-world` |
+
+### `text`
+
+Multi-line plain text.
+
+| | |
+| - | - |
+| Editor params | Min length, Max length |
+| Record form | `<textarea>` |
+| Localized | ✅ |
+
+### `email` / `url`
+
+Render hints — stored as strings, **no format validation** beyond length. If you
+need enforcement, add a `json` field with your own rule.
+
+| | |
+| - | - |
+| Editor params | Min length, Max length |
+| Record form | `<input type="email">` / `<input type="url">` |
+| Localized | ✅ |
+
+### `json`
+
+Arbitrary JSON. Core uses `z.unknown()` — it does not inspect the value.
+Console textarea pretty-prints with 2-space indent; invalid JSON on submit →
+*"not valid JSON"*.
+
+| | |
+| - | - |
+| Editor params | *(none type-specific)* |
+| Record form | `<textarea>` with JSON preview |
+
+---
+
+## Rich text
+
+### `richtext`
+
+`format` picks storage + editor:
+
+| `format` | Stored | Console editor | Site rendering |
+| -------- | ------ | -------------- | -------------- |
+| `lexical` (default) | Lexical state `{ root: … }` or JSON string | Lexical toolbar editor | Convert to HTML (incl. embedded media) |
+| `markdown` | CommonMark string | Write / Preview markdown editor | Shared `markdownToHtml` (escaped, safe links) |
+| `mdx` | Markdown superset string (JSX stays escaped text) | Same as markdown | Same as markdown |
+
+| | |
+| - | - |
+| Editor params | Rich-text format select |
+| Record form | LexicalEditor **or** MarkdownEditor by `format` |
+| Table cell | Plain-text extract (markdown stripped / Lexical text) |
+| Localized | ✅ (both formats) |
+
+---
+
+## Numeric
+
+### `number`
+
+| | |
+| - | - |
+| Editor params | Min, Max (`step="any"`) |
+| Record form | `<input type="number" step="any">`; empty → `null` |
+| Table cell | Formatted number |
+
+### `currency`
+
+ISO 4217-shaped amount. Stored as `NUMERIC` bare number — no per-record FX.
+
+```ts
+{ name: 'price', type: 'currency', currency: 'IDR', required: true, min: 0 }
+```
+
+| | |
+| - | - |
+| Editor params | Currency code (max 3, uppercase) + **live preview** of `250000` under `?locale=id` |
+| Record form | Money input (`CurrencyInput`) |
+| Table cell | Formatted `display` |
+| Write | Bare number **or** `{ base, currency, display }` (round-trip) |
+| Read | Always `{ base, currency, display }` |
+
+Examples:
+
+| `currency` | base | `?locale=id` | `?locale=en` |
+| ---------- | ---- | ------------ | ------------ |
+| `IDR` | 250000 | `Rp 250.000` | `Rp 250,000` |
+| `USD` | 19.5 | `$19,50` | `$19.50` |
+| `JPY` | 1500 | `¥1.500` | `¥1,500` |
+
+Notes:
+
+- Code pattern `^[A-Z]{3}$` only — **not** validated against real ISO 4217.
+- Zero-decimal list (incl. `IDR`) is a **display convention**.
+- `base` stays in the response so a site can repaint `display` with a live rate.
+
+### `custom_currency`
+
+Units ISO never had — store credit, points, `Rp /bulan`:
+
+```ts
+{
+  name: 'budget',
+  type: 'custom_currency',
+  customCurrency: { symbol: '€', suffix: ' /bln', decimals: 0 }
+}
+```
+
+| | |
+| - | - |
+| Editor params | Symbol, position, prefix, suffix, decimals (0–8), space, separators, grouping, negative pattern + **live preview** |
+| Record form | Money input with custom presentation |
+| Read | `{ base, symbol, display }` — `symbol: null` when undeclared |
+
+`negativePattern` must contain `{amount}`:
+
+```ts
+{ negativePattern: '({amount})' }   // accounting: (€1.234,50)
+{ negativePattern: '-{amount}' }     // neutral default
+{ negativePattern: '{amount} {symbol}' }
+```
+
+---
+
+## Boolean
+
+### `boolean`
+
+Stored `0` / `1`.
+
+| `control` | Record form widget |
+| --------- | ------------------ |
+| *(default)* | Checkbox + "check for true" |
+| `toggle` | Switch (`role="switch"`) |
+| `radio` | `— none — / Yes / No` radio group |
+
+| | |
+| - | - |
+| Editor params | Toggle flags only (no type-specific grid) |
+| Typical default | `default: false` + `consoleView: 'side'` |
+
+---
+
+## Date & time
+
+### `date`
+
+`"YYYY-MM-DD"` — regex-validated, **not** a timestamp.
+
+| Record form | `<input type="date">` |
+| Table cell | Formatted date |
+
+### `datetime`
+
+ISO 8601 string (`z.iso.datetime()`).
+
+| Record form | `<input type="datetime-local">` → `new Date(v).toISOString()` |
+| Table cell | Formatted datetime |
+
+---
+
+## Enum
+
+### `enum`
+
+```ts
+{ name: 'status', type: 'enum', enumValues: ['draft', 'live'],
+  control: 'combobox', default: 'draft' }
+```
+
+| `control` | Widget | Stored value |
+| --------- | ------ | ------------ |
+| `combobox` (default) | Native `<select>` | `string` |
+| `search` | Searchable select | `string` |
+| `radio` | Inline radios | `string` |
+| `checklist` | Pick-one rows | `string` |
+| `multichecklist` | Checkboxes | `string[]` (JSON array in TEXT) |
+
+| | |
+| - | - |
+| Editor params | Values (comma-separated in the FieldEditor) |
+| Table cell | The value string; multichecklist enum is **excluded** from column filters |
+
+---
+
+## Relations
+
+### `relation`
+
+```ts
+{
+  name: 'category_id',
+  type: 'relation',
+  relation: { collection: 'categories', field: 'id', kind: 'belongsTo' },
+  consoleView: 'side'
+}
+```
+
+| `kind` | Stored | Console default widget |
+| ------ | ------ | ---------------------- |
+| `belongsTo` | `string` | Chips with inline search + dropdown |
+| `hasOne` | `string` | Same as belongsTo (reverse lookup) |
+| `hasMany` | `string[]` | Tag chips / multichecklist |
+
+Other controls: `search`, `radio`, `checklist`, `multichecklist`.
+
+| | |
+| - | - |
+| Editor params | Target collection, target field, kind, on-delete |
+| Record form | `RelationWidgetRow` — chips / search / radio / checklist |
+| Table cell | Resolved label (via separate options request) |
+| States shown | loading · failed to load · target not registered · no records yet |
+
+Relations are **metadata + storage only** — no SQL FK, no write-time referential
+check, no join on read.
+
+---
+
+## Files & media
+
+These store a **self-contained snapshot**, not just an id, so a record renders
+without an extra lookup.
+
+### `media`
+
+```ts
+// MediaFieldValue
+{
+  id: string           // required
+  url: string          // required — absolute public /media/<key>
+  alt?: string | null
+  width?: number | null
+  height?: number | null
+  focusX?: number | null  // 0–100 percent
+  focusY?: number | null
+}
+```
+
+| | |
+| - | - |
+| Editor params | *(none type-specific)* |
+| Record form | 56×56 thumbnail (object-position from focusX/Y) + alt/size info + Choose/Replace/Remove → MediaPicker |
+| Table cell | Thumbnail |
+
+### `document` / `attachment`
+
+Same shape, different library:
+
+```ts
+// FileRefValue
+{
+  id: string
+  url: string          // /documents/<key> or /attachments/<key>
+  name?: string | null
+  mime?: string | null
+  size?: number | null
+  ext?: string | null
+}
+```
+
+| | |
+| - | - |
+| Record form | 44×48 icon tile + `mime · size` + Choose/Replace/Remove → FilePicker |
+| Table cell | File name / icon |
+
+---
+
+## Primary key (`id`)
+
+Not usually declared. The core synthesizes `{ name: primaryKey, type: 'id' }`
+when absent from `fields`:
+
+```ts
+{ name: 'posts', primaryKey: 'id', fields: [ /* no id field */ ] }
+```
+
+- DDL, record reads and panel field resolvers all fall back to the synthetic field
+- Panel views may list `id` under `fields.read` even when undeclared
+- If you *do* declare it, that declaration is used (platform `privileges` does this)
+
+Do **not** declare both `primaryKey: 'id'` and a separate `id` field of another
+type — the duplicate check keys on `name:type` and it slips through.
+
+---
+
+## Adding a new field type (contributors)
+
+1. Append to `FIELD_TYPES` in `packages/types/src/field.ts`
+2. Add a `case` to `fieldValueSchema()` in `packages/types/src/collection.ts`
+3. Add `SQLITE_COLUMN` entry in `packages/core/src/db/table.ts` + coercion in
+   `db/coerce.ts` if not stored as JSON text
+4. Add the console widget in `packages/console/src/components/FieldEditor.tsx`
+   and `FormInput.tsx`
+5. Document in `packages/core/docs/api.md`
+
+Steps 2–3 are load-bearing: skip coercion → objects become `[object Object]`;
+skip validator → anything is accepted.
+
+## See also
+
+- [Parameters](/fields/parameters/) — shared keys
+- [In the Admin Console](/fields/console/) — UI behaviour

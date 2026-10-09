@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1200" y2="630" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0a1420"/>
+      <stop offset="1" stop-color="#0d1a2a"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="440" y1="280" x2="760" y2="360" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#34d399"/>
+      <stop offset="1" stop-color="#14b8a6"/>
+    </linearGradient>
+    <radialGradient id="glow1" cx="0.85" cy="0.05" r="0.7">
+      <stop stop-color="#34d399" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#34d399" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow2" cx="0.1" cy="0.9" r="0.7">
+      <stop stop-color="#14b8a6" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#14b8a6" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <rect width="1200" height="630" fill="url(#glow1)"/>
+  <rect width="1200" height="630" fill="url(#glow2)"/>
+  <rect x="60" y="60" width="1080" height="510" rx="24" stroke="#1c2f3d" stroke-width="2"/>
+  <rect x="470" y="170" width="260" height="260" rx="56" fill="#0a1420" stroke="url(#accent)" stroke-width="6"/>
+  <path d="M516 366V194h46l48 112 48-112h46v172h-44V258l-46 108h-32l-46-108v108h-44z" fill="url(#accent)"/>
+  <text x="600" y="500" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="52" font-weight="800" fill="#ecfdf5">Hamolus</text>
+  <text x="600" y="548" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="24" font-weight="500" fill="#6ee7b7">Headless data platform on Cloudflare Workers</text>
+</svg>

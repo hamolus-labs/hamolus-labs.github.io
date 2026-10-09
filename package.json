@@ -1,0 +1,22 @@
+{
+  "name": "hamolus-github-io",
+  "type": "module",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Documentation site for Hamolus — a headless data platform on Cloudflare Workers",
+  "scripts": {
+    "dev": "astro dev",
+    "start": "astro dev",
+    "build": "node scripts/update-version.mjs && astro build",
+    "preview": "astro preview",
+    "astro": "astro"
+  },
+  "dependencies": {
+    "@astrojs/sitemap": "^3.7.4",
+    "@astrojs/starlight": "^0.34.3",
+    "@tailwindcss/vite": "^4.3.3",
+    "astro": "^5.7.0",
+    "sharp": "^0.34.1",
+    "tailwindcss": "^4.3.3"
+  }
+}

@@ -1,0 +1,85 @@
+---
+title: Console example
+description: The Hamolus console example — with-plugins — how @hamolus/console ships as a library, how plugins register through console.config.ts, and how to run it.
+---
+
+The console example shows **[`@hamolus/console`](/console/) acting as a
+library**: the host project writes almost nothing, and what it writes is
+strictly validated.
+
+`@hamolus/console` already ships the UI, the router and the stylesheet. A
+project only has to install it, import the stylesheet, and call `mount({ config
+})` on a target element — there is no JSX tree, no Solid plugin and no build
+pipeline of your own in the host.
+
+## With plugins
+
+[`with-plugins`](https://github.com/hamolus-labs/hamolus/tree/main/examples/consoles/with-plugins)
+mounts the console and registers the **todo** and **kanban** plugins — the
+whole example is one `console.config.ts`, one `src/main.ts` and an `index.html`:
+
+```ts
+// console.config.ts
+import { defineConsoleConfig } from '@hamolus/types';
+import { kanbanPlugin } from '@hamolus/plugin-console-kanban';
+import { todoPlugin } from '@hamolus/plugin-console-todo';
+
+export const config = defineConsoleConfig({ plugins: [todoPlugin, kanbanPlugin] });
+```
+
+```ts
+// src/main.ts
+import '@hamolus/console/style.css';
+import { mount } from '@hamolus/console';
+import { config } from './console.config';
+
+mount({ config });
+```
+
+What it demonstrates:
+
+- **`console.config.ts` is the only place plugins register.** The list is sent
+  to the console, which registers everything before first render — the plugins
+  then appear under `/plugins` and in the sidebar.
+- **No plugin folder, no plugin build.** The plugin packages ship compiled (JS
+  + their own stylesheet); the host only names the package.
+- **Plugin contracts come from `@hamolus/plugin-console-contracts`**, not from
+  `@hamolus/console`.
+- **Plugins store in KV, not collections** — so they never show up in the
+  Collections screen.
+- **Strict config validation**: unknown keys fail; the schema refuses a
+  `localization` property (localization belongs to the core, read through
+  `GET /_meta/localization`).
+- **HMR is cleaned up** through `import.meta.hot.dispose(() =>
+  instance.unmount())` so instances never stack.
+
+## Running it
+
+There is **no env to fill in**. The core endpoint is chosen at runtime from the
+console's navbar endpoint menu (remembered per browser), and login is the
+console's normal admin login form with credentials configured on the core:
+
+```bash
+# 1. the core, in another terminal (http://localhost:8787)
+cd /path/to/acme && pnpm dev
+
+# 2. the console
+cd examples/consoles/with-plugins
+pnpm install
+pnpm dev           # http://localhost:5176
+```
+
+Then set the API endpoint to `http://localhost:8787` in the navbar and log in.
+The same core can serve the console and the panel examples side by side.
+
+## Console vs panel
+
+| | Console | Panel |
+| --- | --- | --- |
+| Scope | Generic, complete — collections, records, media, users, seed, panels, config | Narrow, one panel per need |
+| Screen surface | Built-in | Manifest-driven, ACL per role/view/operation |
+| Access | Full admin login | Token, restricted to a role |
+| Client | `@hamolus/console` | `@hamolus/panel` |
+
+A console is meant to manage a whole core; a panel is meant to expose one
+screened slice of it to a team that should not hold the full admin.

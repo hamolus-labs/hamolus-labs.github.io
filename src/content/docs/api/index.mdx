@@ -1,0 +1,265 @@
+---
+title: REST API
+description: Hamolus core REST API — auth, collections, records, media, panels, permissions.
+---
+
+Base URL locally: `http://localhost:8787/api`. In production: your Worker URL.
+
+All responses are JSON:
+
+```jsonc
+// success (single)
+{ "data": { /* item */ } }
+
+// success (list)
+{ "data": [ /* items */ ], "meta": { "page": 1, "pageSize": 20, "total": 3, "totalPages": 1 } }
+
+// error
+{ "error": { "code": "NOT_FOUND", "message": "..." } }
+```
+
+## Authentication
+
+Every `/api/*` request except `GET /api/health` and the auth-skip paths must
+carry a JWT signed with HS256.
+
+### Skip paths
+
+```
+POST /api/_auth/token
+POST /api/_auth/login
+GET|POST /api/_auth/setup
+GET|POST /api/_auth/super
+GET /api/health
+```
+
+Additionally, MCP machine routes (`/api/_mcp/config`, `/api/_mcp/session`) sit
+**above** the JWT middleware and authenticate with the instance id.
+
+### Get a token
+
+```bash
+curl -X POST http://localhost:8787/api/_auth/token \
+  -H 'content-type: application/json' \
+  -d '{"key":"dev-admin-key-change-me"}'
+# → { "data": { "token": "<jwt>", "expiresAt": "…" } }
+```
+
+```bash
+curl http://localhost:8787/api/posts -H 'authorization: Bearer <jwt>'
+```
+
+`POST /_auth/token` issues `sub: 'admin'` with **no permission claim** — all
+permissions. Prefer per-user login + roles in production.
+
+### Public GETs
+
+Set `PUBLIC_GETS=true` (Wrangler var) to allow all GET endpoints without a
+token. Handy for SSG builds and simple read-only frontends. Keep it unset when
+data should stay private. Multi-tenant modes should leave it `false`.
+
+### Scope headers
+
+| Header | Selects |
+| ------ | ------- |
+| `x-land` | Land |
+| `x-colony` | Colony |
+
+Required on per-scope endpoints when `CORE_MODE=centralized` (else
+`400 SCOPE_REQUIRED`). Optional in `independent` mode (falls back to defaults).
+
+## Auth endpoints
+
+| Method | Path | Auth | Description |
+| ------ | ---- | ---- | ----------- |
+| POST | `/_auth/token` | public | Exchange `ADMIN_KEY` for all-access token |
+| GET | `/_auth/setup` | public | `{ setupRequired }` |
+| POST | `/_auth/setup` | public | Create first admin (empty users table only) |
+| POST | `/_auth/login` | public | `{ username, password }` → login response |
+| GET | `/_auth/me` | any JWT | Current session |
+| POST | `/_auth/me/password` | any JWT | Self-service password change |
+| GET | `/_auth/users` | `users.read` | List users |
+| POST | `/_auth/users` | `users.write` | Create user |
+| PUT | `/_auth/users/{id}` | `users.write` | Update user |
+| DELETE | `/_auth/users/{id}` | `users.write` | Delete user |
+| GET/POST/PUT/DELETE | `/_auth/supers`… | super | Super-admin management |
+
+Legacy admin-key sessions have no password → `400 ADMIN_KEY_SESSION` on password
+change. Last active admin is protected from deletion/demotion.
+
+## Health
+
+```bash
+curl http://localhost:8787/api/health
+# → { "ok": true, "service": "core" }
+```
+
+## Collection metadata
+
+| Method | Endpoint | Permission |
+| ------ | -------- | ---------- |
+| GET | `/_meta/collections` | `collections.read` |
+| GET | `/_meta/collections/{name}` | `collections.read` |
+| PUT | `/_meta/collections/{name}` | `collections.write` |
+| DELETE | `/_meta/collections/{name}` | `collections.write` |
+
+`PUT` migrates (adds columns only). `DELETE` drops the table.
+
+See [Collections](/core/collections/) and
+[Fields](/fields/) for definition shapes.
+
+## Navigation groups
+
+| Method | Endpoint | Permission |
+| ------ | -------- | ---------- |
+| GET | `/_meta/groups` | `collections.read` |
+| PUT | `/_meta/groups/{id}` | `collections.write` |
+| DELETE | `/_meta/groups/{id}` | `collections.write` |
+
+## Settings & localization
+
+| Method | Endpoint | Permission |
+| ------ | -------- | ---------- |
+| GET/PUT | `/_meta/settings` | `settings.read` / `settings.write` |
+| GET | `/_meta/localization` | `settings.read` (public under `PUBLIC_GETS`) |
+| GET | `/_meta/stats` | `stats` (platform) |
+
+## Config entries
+
+| Method | Endpoint | Notes |
+| ------ | -------- | ----- |
+| GET | `/_config` | List; land admin may need `?colony=` |
+| GET | `/_config/{key}` | One entry |
+| PUT | `/_config/{key}` | Upsert |
+| DELETE | `/_config/{key}` | Delete |
+
+Key: `^[a-z][a-z0-9._-]*$`. Row key: `(land, colony, key)`.
+
+## Dynamic records
+
+Mounted last — any collection name:
+
+```
+GET    /api/:collection/__lastUpdate
+GET    /api/:collection                  ?page=&pageSize=&search=&…
+GET    /api/:collection/:id
+POST   /api/:collection
+PUT    /api/:collection/:id
+PATCH  /api/:collection/:id
+DELETE /api/:collection/:id
+POST   /api/:collection/__bulk_delete    max 200 ids
+```
+
+- `search` matches across string fields; `filter` is strict (typo → error).
+- Localized reads: `?locale=id` resolves localized fields.
+- Money fields return `{ base, currency, display }`.
+
+Full reference (filters, bulk delete, `__lastUpdate`):
+[Records API](/api/records/).
+
+## Media
+
+| Method | Endpoint | Notes |
+| ------ | -------- | ----- |
+| GET | `/_media` | List |
+| GET | `/_media/taxonomy` | Taxonomy |
+| GET | `/_media/taxonomy/detail` | Taxonomy detail |
+| POST | `/_media/taxonomy` | Create taxonomy |
+| GET | `/_media/:id` | One asset |
+| POST | `/_media` | multipart: `file`, `thumb`, `variantMeta`, `focusX/Y`, `metadata` |
+| PATCH/PUT | `/_media/:id` | Update / replace bytes |
+| DELETE | `/_media/:id` | Delete |
+
+Public serving (no JWT): `/media/*`.
+
+## Documents & attachments
+
+Factory-generated routes under `/api/_documents` and `/api/_attachments`:
+
+```
+GET    /            GET /taxonomy     GET /:id
+POST   /            PATCH /:id        DELETE /:id
+```
+
+Public serving:
+
+```
+GET /documents/:key
+GET /documents/:key/download
+GET /attachments/:key          (immutable cache, 1 year)
+```
+
+## Lands & colonies
+
+```
+GET|PUT|DELETE /api/_meta/universe/lands[/:id]
+GET|PUT|DELETE /api/_meta/universe/colonies[/:id]
+```
+
+## Seed
+
+```
+GET  /api/_meta/seed/export
+POST /api/_meta/seed/apply
+```
+
+## Panels
+
+```
+GET|POST       /api/_panels
+GET|POST|PUT|PATCH|DELETE /api/_panels/:id
+GET            /api/_panels/:id/bootstrap
+… views/:viewId/{assets,records,relations, dashboard}
+```
+
+See [Panels](/panels/).
+
+## Plugins (KV)
+
+```
+GET|PUT|DELETE /api/_plugins/:plugin[/:key]
+```
+
+Writes require `settings.write`.
+
+## MCP
+
+Machine (instance id): `GET /_mcp/config`, `POST /_mcp/session`
+
+Operator (JWT, `mcp.read`/`mcp.write`):
+`/_mcp/instances`, `/_mcp/instances/:id`, `/_mcp/instances/:id/tokens`,
+`/_mcp/tokens/:tokenId`
+
+See [MCP](/mcp/).
+
+## Permissions
+
+20 permissions — each with `.read` / `.write`:
+
+`users`, `config`, `mcp`, `settings`, `collections`, `records`, `media`,
+`panels`, `lands`, `colonies`
+
+Built-in roles (`PRIVILEGE_SEEDS`):
+
+| Role | Scope | Typical grants |
+| ---- | ----- | -------------- |
+| `land_admin` | land | All except `lands.write` |
+| `admin` | colony | All except `lands.*`, `colonies.*` |
+| `manager` | — | No `users.write`, `config.write`, `mcp.write`, `lands.*`, `colonies.*` |
+| `editor` | — | Content write |
+| `viewer` | — | All `.read` except `lands.`, `panels.` |
+| `panel_user` | — | Empty set; panel ACL only |
+
+## Error codes (common)
+
+| Code | When |
+| ---- | ---- |
+| `NOT_FOUND` | Missing record / collection / panel |
+| `VALIDATION_ERROR` | Zod rejection |
+| `UNAUTHORIZED` | Missing/invalid JWT |
+| `FORBIDDEN` | Permission missing |
+| `SCOPE_REQUIRED` | Multi-scope endpoint without `x-land`/`x-colony` |
+| `INVALID_COLLECTION` | Bad collection definition payload |
+| `PANEL_REFERENCE_INVALID` | Manifest references unknown collection/field |
+| `MCP_DISABLED` | Instance switched off |
+| `ADMIN_KEY_SESSION` | Password change on admin-key session |

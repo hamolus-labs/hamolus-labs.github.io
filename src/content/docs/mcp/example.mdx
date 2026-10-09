@@ -1,0 +1,195 @@
+---
+title: "End-to-end example: agent on a core"
+description: Scaffold a project, add the MCP server, create an instance and token, connect an agent, and call tools and resources.
+---
+
+This walkthrough hangs a real MCP agent on a core: scaffold a project, add the MCP
+server, create the instance and a per-user token, connect an agent, and drive the
+data with tools and resources. It needs only a checkout and two consoles.
+
+**Prerequisites:** Node 22+, pnpm, a Cloudflare account when you reach the deploy
+step. Everything before that runs locally.
+
+## 1. Scaffold the project
+
+```bash
+pnpm create hamolus example-shop
+cd example-shop
+pnpm install
+```
+
+This yields the workspace with a core and a console. The core answers on
+`http://localhost:8787`, the console on its own port — check the generated output for
+the exact numbers (`pnpm dev` prints them).
+
+## 2. Add the MCP server
+
+```bash
+pnpm hamolus add mcp
+```
+
+This writes a `mcp/` worker from `templates/mcps/basic`, registers `mcp` as a
+workspace glob in `pnpm-workspace.yaml`, and — because the project has a core — writes
+`mcp/.dev.vars` so local `pnpm dev` can reach the core:
+
+```sh
+CORE_API_URL=http://localhost:8787/api
+MCP_INSTANCE_ID=
+```
+
+`CORE_API_URL` is already a working dev default. `MCP_INSTANCE_ID` is blank on
+purpose: the id is issued by the console, not guessed, and until it is set the server
+boots but refuses every `POST /mcp` with a message naming the fix.
+
+## 3. Boot both
+
+```bash
+pnpm dev
+```
+
+In a default project the servers are:
+
+| Part | Address | Override |
+| --- | --- | --- |
+| Core | `http://localhost:8787` | `HAMOLUS_CORE_PORT` |
+| Console | `http://localhost:5173` | Vite default |
+| MCP server | `http://localhost:8788/mcp` | `HAMOLUS_MCP_PORT` |
+
+A second checkout on one machine is `HAMOLUS_MCP_PORT=8798 pnpm dev`, not a source
+edit.
+
+## 4. Create the instance in the console
+
+Open the console, go to **Environment → MCP**, and create an instance for the colony
+your data lives in. A label like `support` or `laptop` is a name only — everything
+the instance implies (scope, read-only, tool groups, dynamic collections) is edited
+here and picked up by the server within about a minute, with no redeploy.
+
+Copy the generated **instance id** (`mcp_` + 26 base62 chars).
+
+## 5. Put the id into `mcp/.dev.vars`
+
+```sh
+echo "MCP_INSTANCE_ID=mcp_xxxxxxxxxxxxxxxxxxxxxxxxxx" >> mcp/.dev.vars
+```
+
+Restart `pnpm dev` — `wrangler dev` reads `.dev.vars` at startup. Confirm the wiring:
+
+```bash
+curl -s http://localhost:8788/ | grep -o '"mode": *"[^"]*"'
+# "mode": "console-managed"
+```
+
+`console-managed` means the server read its configuration from the core and is
+bound to the instance.
+
+## 6. Issue a per-user token
+
+In the console, on the instance you created, issue a **new token** and copy the full
+string `mcp_<id>_<secret>`. It is shown once; only its hash is stored, so a lost copy
+means issuing a new one.
+
+This token is who any caller will be. It is scoped to the instance's colony, can be
+revoked one at a time, and is exchanged by the core for a short-lived session — a
+revoked token stops working within 15 minutes.
+
+## 7. Confirm the surface
+
+Initialize a session over Streamable HTTP (SSE accept is required):
+
+```bash
+curl -X POST http://localhost:8788/mcp \
+  -H "authorization: Bearer mcp_<id>_<secret>" \
+  -H 'content-type: application/json' \
+  -H 'accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
+```
+
+Then list the tools the instance actually offers:
+
+```bash
+curl -sX POST http://localhost:8788/mcp \
+  -H "authorization: Bearer mcp_<id>_<secret>" \
+  -H 'content-type: application/json' \
+  -H 'accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | grep -o '"name"' | wc -l
+```
+
+The default groups (`records,media,meta`) register 32 tools; turning **Read-only** on
+makes write tools disappear from this count entirely.
+
+## 8. Connect an agent
+
+The endpoint is remote and stateless, so a client needs the URL and the bearer token
+— nothing else. For opencode, add this to `~/.config/opencode/opencode.jsonc`:
+
+```jsonc
+"mcp": {
+  "Hamolus-local": {
+    "type": "remote",
+    "url": "http://localhost:8788/mcp",
+    "headers": { "Authorization": "Bearer mcp_<id>_<secret>" },
+    "enabled": true
+  }
+}
+```
+
+For a deployed worker, the same entry points at
+`https://your-name-mcp.<account>.workers.dev/mcp`. Any MCP client that supports a
+remote Streamable HTTP server takes the same pair — URL plus
+`Authorization: Bearer <token>`.
+
+## 9. Drive the data
+
+Ask the agent a real task, e.g. _"summarise the products collection: read the schema
+first via `get_collection`, list the records, and draft a new product with
+`create_record` — but check its `mcp` mode before writing."_ The tools, resources and
+prompts in play:
+
+```json
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_collection","arguments":{"collection":"products"}}}
+```
+
+```json
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_records","arguments":{"collection":"products","pageSize":25}}}
+```
+
+```json
+{"jsonrpc":"2.0","id":4,"method":"resources/read","params":{"uri":"hamolus://collections"}}
+```
+
+A model that is told "barely anything" still starts from `get_collection`, reads
+`hamolus://spec/collection-definition` before writing, and surfaces the refusals (a
+read-only instance, a `read` collection, a `hide` collection) up front. See the
+[server reference](/mcp/reference/) for the whole surface and what each tool refuses.
+
+## 10. Go online
+
+In the generated project:
+
+```bash
+cd mcp
+pnpm deploy                       # or root: pnpm deploy:mcp
+```
+
+There are **no secrets to set** — both vars are plain and belong in `wrangler.jsonc`
+under `vars`:
+
+```jsonc
+"vars": {
+  "CORE_API_URL": "https://example-shop-core.<account>.workers.dev/api",
+  "MCP_INSTANCE_ID": "mcp_xxxxxxxxxxxxxxxxxxxxxxxxxx"
+}
+```
+
+Deploy, then confirm `GET /` on the worker says `mode: "console-managed"`. On some
+accounts the core's `workers.dev` URL is not reachable from inside the Workers
+runtime (every call returns a bodyless `404`); the fix there is a service binding
+instead of a different URL:
+
+```jsonc
+"services": [{ "binding": "CORE", "service": "example-shop-core" }]
+```
+
+Keep `CORE_API_URL` set — the core routes on path, so a bound call reuses the URL
+that was already built and only the destination changes.

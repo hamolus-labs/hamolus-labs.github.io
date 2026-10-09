@@ -1,0 +1,139 @@
+---
+title: Permissions & Roles
+description: The 20 Hamolus permissions, built-in roles, privilege scopes and how ACL is enforced.
+---
+
+Access control in Hamolus is **permission-based** with **scope**. The UI mirrors
+permissions; the core enforces them on every route.
+
+## Permissions
+
+Twenty keys, each with `.read` and `.write`:
+
+| Domain | Permissions |
+| ------ | ----------- |
+| Users | `users.read`, `users.write` |
+| Config entries | `config.read`, `config.write` |
+| MCP | `mcp.read`, `mcp.write` |
+| Settings (KV) | `settings.read`, `settings.write` |
+| Collections | `collections.read`, `collections.write` |
+| Records | `records.read`, `records.write` |
+| Media | `media.read`, `media.write` |
+| Panels | `panels.read`, `panels.write` |
+| Lands | `lands.read`, `lands.write` |
+| Colonies | `colonies.read`, `colonies.write` |
+
+Declared in `packages/types/src/auth.ts`. Session tokens carry a permission
+array; routes call `requireRead` / `requireWrite` style guards.
+
+### Special case — legacy admin key
+
+`POST /api/_auth/token` with `ADMIN_KEY` issues `sub: 'admin'` with **no
+permission claim**, which the session layer reads as **all** permissions.
+Useful for bootstrap and scripts; prefer per-user login + roles in production
+(and never share the admin key with an MCP worker — see
+[MCP](/mcp/#why-not-core_admin_key)).
+
+## Built-in roles (privilege seeds)
+
+| Role | Typical scope | Grants (summary) |
+| ---- | ------------- | ---------------- |
+| *(super-admin)* | `universe` | Everything, including lands/colonies registry and supers |
+| `land_admin` | `land` | Everything **except** `lands.write` |
+| `admin` | `colony` | Everything **except** `lands.*` and `colonies.*` |
+| `manager` | colony | Content ops — **no** `users.write`, `config.write`, `mcp.write`, `lands.*`, `colonies.*` |
+| `editor` | colony | Create/update content |
+| `viewer` | colony | All `.read` **except** `lands.*` and `panels.*` |
+| `panel_user` | colony | **Empty** permission set — access only via panel ACL |
+
+Custom privileges can be created with any subset of the 20 permissions and a
+scope of `universe`, `land` or `colony`.
+
+## Scope is not the role name
+
+```
+reach = privilege.scope  ×  privilege.permissions
+```
+
+- A privilege named `admin` with `scope: 'colony'` only reaches its colony.
+- The core never does `if (role === 'admin') grant everything`.
+- Gate: `pnpm check:config-scope-acl` pins this for config entries.
+
+## Where permissions are checked
+
+| Surface | Mechanism |
+| ------- | --------- |
+| REST routes | Per-endpoint permission guard |
+| Console UI | Sidebar/actions gated by session permissions (cosmetic + UX) |
+| Panel manifests | Session permissions **intersect** manifest field/operation ACL |
+| MCP tools | Instance tool groups → permission mapping; token can only narrow |
+| Plugin KV writes | `settings.write` |
+
+UI locks are not the security boundary. Example:
+`pnpm check:panel-acl` proves a panel `fields.write` deny is enforced over HTTP,
+not merely hidden in the form.
+
+## MCP permission mapping
+
+| Tool group | Read | Write |
+| ---------- | ---- | ----- |
+| `records` | `records.read`, `collections.read`, `users.read` | `records.write`, `collections.write`, `users.write` |
+| `media` | `media.read` | `media.write` |
+| `meta` | `settings.read`, `config.read`, `collections.read`, `lands.read`, `colonies.read` | `settings.write`, `config.write`, `collections.write` |
+| `admin` *(opt-in)* | `users.read`, `collections.read`, `lands.read`, `colonies.read` | `users.write`, `collections.write`, `lands.write`, `colonies.write`, `settings.write` |
+
+- Instance `readonly: true` strips every `*.write`
+- Per-user token `permissions` **intersect** with the instance set — cannot widen
+- Write tools are unregistered on read-only instances (not offered then rejected)
+
+## Session & password rules
+
+| Rule | Detail |
+| ---- | ------ |
+| JWT lifetime | 24 h for console sessions |
+| Password change | `POST /_auth/me/password` — self-service, any role |
+| Admin-key sessions | No password → `400 ADMIN_KEY_SESSION` on password change |
+| Last active admin | Cannot be deleted or demoted |
+| Super-admin | Separate table `_auth_super`; can be disabled but not self-deleted |
+
+## Error codes
+
+| Code | Meaning |
+| ---- | ------- |
+| `UNAUTHORIZED` | Missing/invalid JWT |
+| `FORBIDDEN` | Authenticated but permission missing |
+| `SCOPE_REQUIRED` | Centralized core, scoped route, no `x-land`/`x-colony` |
+| `SCOPE_MISMATCH` | JWT land ≠ request land, or colony belongs to another land |
+| `MCP_DISABLED` | MCP instance switched off (403) |
+
+Status-code discipline on MCP machine routes: `401` credential rejected ·
+`403` instance off · `400` malformed — messages never distinguish "unknown id"
+from "revoked token".
+
+## Authoring a custom privilege
+
+Via console **Users → Privileges** (or API):
+
+1. Choose scope: universe / land / colony
+2. Name it (e.g. `content_lead`)
+3. Check the permission subset (e.g. `collections.read`, `records.write`,
+   `media.read`)
+4. Assign to users
+
+A user holds one privilege per scope context they operate in. Cross-land use of
+a land-scoped token is rejected (`403 SCOPE_MISMATCH`).
+
+## Checklist for operators
+
+- [ ] Production uses per-user accounts, not shared `ADMIN_KEY` tokens
+- [ ] MCP instances never receive the admin key
+- [ ] `admin` MCP tool group is opt-in and reviewed
+- [ ] Panel-only users get `panel_user` (empty perms) + panel membership
+- [ ] Land admins do not need `lands.write` unless they manage the registry
+- [ ] Super-admins are few and named — they are the universe blast radius
+
+## See also
+
+- [Universe, Land & Colony](/concepts/scope/)
+- [REST API](/api/)
+- [MCP](/mcp/)

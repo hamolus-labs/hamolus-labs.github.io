@@ -1,0 +1,36 @@
+---
+title: Getting Started
+description: Install Hamolus, scaffold a project, and understand how the parts fit together.
+---
+
+Hamolus is a headless data platform on Cloudflare Workers. You describe a
+**collection** as metadata; Hamolus creates the D1 table, serves a multi-tenant
+CRUD API for it, and generates the admin console, panels and AI tooling around it.
+
+There is no application to fork. A Hamolus project is assembled from parts:
+
+```
+core/       the API Worker (thin seam over @hamolus/core)
+console/    SolidJS admin app
+panels/     generated data-driven app surfaces
+mcp/        Model Context Protocol server for AI agents
+site/       the public site (Astro, Next.js) reading the core over REST
+seeds/      data generators
+configs/    wrangler presets (staging, production, per land)
+```
+
+## What you need
+
+- **Node.js ≥ 20**
+- **pnpm 11** (the CLI scaffolds with pnpm workspaces)
+- A **Cloudflare account** with Workers, D1, KV and R2 available
+- Familiarity with TypeScript is helpful but not required to get started
+
+## Next steps
+
+1. [Installation](/getting-started/installation/) — install the CLI and create a project
+2. [Quick Start](/getting-started/quick-start/) — run the core, console and seed data
+3. [Configuration](/getting-started/configuration/) — the five configuration surfaces
+4. [Deploying](/getting-started/deploying/) — ship the core, console, panels and MCP to Cloudflare
+5. [Core](/core/) — how the API worker works
+6. [Field Definition](/fields/) — design your collections

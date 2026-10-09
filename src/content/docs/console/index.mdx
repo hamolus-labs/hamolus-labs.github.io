@@ -1,0 +1,126 @@
+---
+title: Console
+description: The Hamolus admin console — a SolidJS SPA driven by core metadata.
+---
+
+The **console** is Hamolus's admin application: a SolidJS + Vite + StyleX SPA
+served as static assets from a Cloudflare Worker.
+
+## Key characteristic
+
+**Your project never rewrites the console source.** It only owns:
+
+1. `console.config.ts` — plugin registration (the file's only property)
+2. A one-line `mount()` call
+
+Everything else is copied from `templates/consoles/basic/` by
+`hamolus add console` and is a thin shell around `@hamolus/console`.
+
+The console is **manifest-driven**: it reads collection, panel and settings
+metadata from the core API and renders generic CRUD, media, panel and plugin UI.
+
+## Stack
+
+| Layer | Technology |
+| ----- | ---------- |
+| UI | SolidJS |
+| Router | `@solidjs/router` |
+| Styling | StyleX (`@stylexjs/stylex`) |
+| Server state | `@tanstack/solid-query` |
+| Rich text | Lexical |
+| Build | Vite + `vite-plugin-solid` |
+
+Deployed as a static Worker with
+`not_found_handling: "single-page-application"`.
+
+## Pages
+
+| Page | Route responsibility |
+| ---- | -------------------- |
+| Dashboard | Overview stats |
+| Collections | Collection list + create |
+| CollectionPage | Records CRUD for one collection |
+| Config | KV settings + config entries |
+| Seed | Seed export/apply |
+| Panels | Panel list + manifests |
+| PanelDetail | Panel bootstrap / ACL view |
+| Plugins | Plugin pages (from registered plugins) |
+| Universe | Lands & colonies |
+| Users | User & privilege management |
+| Mcp | MCP instances & tokens |
+| Media | Media library |
+| AttachmentsPage | Attachments library |
+| Documents | Documents library |
+| Login | Auth |
+
+Routes are built in `src/lib.tsx`; sidebar navigation in `Layout.tsx` is gated
+by session permissions.
+
+## Configuration
+
+```ts
+// console.config.ts
+import { defineConsoleConfig } from '@hamolus/types'
+import { todoPlugin } from '@hamolus/plugin-console-todo'
+
+export const config = defineConsoleConfig({ plugins: [todoPlugin] })
+export default config
+```
+
+- Strict schema — unknown keys are rejected.
+- Exactly one property: `plugins` (default `[]`).
+- **Localization is never configured here.** The console reads the locale list
+  from the core via `GET /_meta/localization` at runtime.
+
+API helpers:
+
+```ts
+setConsoleConfig(config)
+getConsoleConfig()
+resetConsoleConfig()
+```
+
+## Dev vs production networking
+
+| Environment | `/api` behaviour |
+| ----------- | ---------------- |
+| Dev | Vite proxies `/api` to the core — one origin, no CORS preflight |
+| Production | Cross-origin; the core allows `cors()` on `/api/*` |
+
+## Library modules (`src/lib/`)
+
+| Module | Role |
+| ------ | ---- |
+| `api.ts` | HTTP client |
+| `session.ts` | Auth session |
+| `store.ts` | Shared signals |
+| `cache.ts` | Query cache helpers |
+| `activity.ts` | Activity log |
+| `files.ts` / `image.ts` / `media.ts` | Media & file helpers |
+| `labels.ts` / `locale.ts` | Presentation |
+| `pluginKv.ts` | Plugin KV client |
+| `prefs.ts` | User preferences (localStorage) |
+| `relations.ts` | Relation option resolution |
+| `theme.ts` | Theming |
+| `version.ts` | Core version reporting |
+
+UI preferences are stored in `localStorage`.
+
+## Permissions in the UI
+
+The sidebar and actions check the session's permission set
+(`users.*`, `collections.*`, `records.*`, `panels.*`, `mcp.*`, …). A locked
+control is not the security boundary — the core enforces the same ACL over HTTP
+(see `pnpm check:panel-acl`).
+
+## Adding plugins
+
+```bash
+hamolus add plugin todo
+```
+
+This adds one import and one array element to `console.config.ts`. Plugin ids
+are `snake_case` and **must be unique** — duplicates collide on the KV prefix
+and the console throws at mount.
+
+See [Plugins](/plugins/).

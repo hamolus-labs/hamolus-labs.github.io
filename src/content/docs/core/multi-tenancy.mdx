@@ -1,0 +1,108 @@
+---
+title: Multi-tenancy
+description: Lands, colonies, scope headers and CORE_MODE in Hamolus.
+---
+
+Hamolus is multi-tenant by design. The scope ladder is:
+
+```
+universe
+  └── land        (tenant / organization)
+        └── colony (sub-unit under a land)
+```
+
+Most tables carry `land` and `colony` columns; primary keys are frequently
+`(land, colony, id)`.
+
+:::tip[New here?]
+Start with the conceptual guide —
+[Universe, Land & Colony](/concepts/scope/) — for ids, the
+console Universe page and common pitfalls. This page is the API/ops view.
+:::
+
+## CORE_MODE
+
+Declared as a Wrangler var (`wrangler.jsonc`), never defaulted in code:
+
+| Mode | Behaviour |
+| ---- | --------- |
+| `independent` | Single scope. Land/colony layer off. The only mode that typically sets `PUBLIC_GETS=true`. |
+| `centralized` | Full multi-tenant. Scope headers required on per-scope endpoints. |
+| `proxy` | Proxies scope to an upstream. |
+| `bridge` | Bridges two cores. |
+
+```jsonc
+// wrangler.jsonc
+{
+  "vars": {
+    "CORE_MODE": "independent",
+    "DEFAULT_LAND": "default",
+    "DEFAULT_COLONY": "default"
+  }
+}
+```
+
+`default` is a **reserved sentinel** — it resolves to `root_lnd` / `root_cny`.
+
+## Scope headers
+
+| Header | Selects |
+| ------ | ------- |
+| `x-land` | Land id |
+| `x-colony` | Colony id |
+
+- In `centralized` mode, per-scope endpoints require the header or return
+  `400 SCOPE_REQUIRED`.
+- Global endpoints (`/api/health`, `/api/_auth/*`, universe lands/colonies)
+  ignore scope headers.
+- In `independent` mode headers are optional and fall back to defaults.
+- The console sends `x-colony` automatically when an endpoint has a colony set.
+- Sites forward `CORE_LAND` / `CORE_COLONY`.
+
+An **unknown** land/colony mints nothing — no privileges, no bootstrap.
+
+## Lands & colonies API
+
+```
+GET|PUT|DELETE /api/_meta/universe/lands[/:id]
+GET|PUT|DELETE /api/_meta/universe/colonies[/:id]
+```
+
+These are global endpoints (no scope headers). Land admin tooling that writes
+colony-scoped data still needs `x-land` / `?colony=`.
+
+## Scope resolution internals
+
+`applyScope` resolves headers into a scope context **before** domain handlers run.
+In the same pass it bootstraps that scope's privileges and applies code-defined
+collections/panels for that scope.
+
+Config entries (`/_config`) are keyed by `(land, colony, key)`. The `?land=` /
+`?colony=` query on `/_config` is a **request for a target**, not a grant —
+reach follows the privilege's scope, never its name.
+
+## Permissions & scope
+
+Built-in roles and their typical scope:
+
+| Role | Scope | Notes |
+| ---- | ----- | ----- |
+| `land_admin` | land | Everything except `lands.write` |
+| `admin` | colony | Everything except `lands.*` / `colonies.*` |
+| `manager` | — | No `users.write`, `config.write`, `mcp.write`, `lands.*`, `colonies.*` |
+| `editor` | — | Content write |
+| `viewer` | — | All `.read` except `lands.` / `panels.` |
+| `panel_user` | — | Empty permission set; access only to assigned panels |
+
+Full permission list: `users.*`, `config.*`, `mcp.*`, `settings.*`,
+`collections.*`, `records.*`, `media.*`, `panels.*`, `lands.*`, `colonies.*`
+(each `.read` / `.write`) — 20 permissions total.
+
+## Gate
+
+```bash
+pnpm check:scope-colony-resolution   # needs core on :8787
+```
+
+The gate asserts that a request carrying an unknown `x-land`/`x-colony` does not
+mint privileges.

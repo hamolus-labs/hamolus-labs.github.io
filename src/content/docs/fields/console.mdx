@@ -1,0 +1,253 @@
+---
+title: Field Definition — In the Admin Console
+description: How field definitions appear in the console — FieldEditor, RecordForm widgets, table cells and layout.
+---
+
+This page is the **admin-panel view** of field definitions. Two places matter:
+
+| UI | What it edits | Driven by |
+| -- | ------------- | --------- |
+| **FieldEditor** (inside CollectionEditor) | The field definition itself | `FieldDefinition` schema |
+| **RecordForm** + **Table** (inside CollectionPage) | Record data | The saved field definitions |
+
+The console is generic: it never hardcodes your fields. Whatever you save in the
+FieldEditor becomes the form and the table.
+
+---
+
+## FieldEditor — defining a field
+
+Opened from **Collections → [collection] → Edit** (or New collection). Each field
+is a **card** in a vertical list.
+
+### Card chrome
+
+```
+┌ #3 ─────────────────────────────────────────────┐
+│  [type select]          ↑  ↓  🗑 remove          │
+│                                                 │
+│  Name *          Label                          │
+│  [snake_case]    [placeholder = derived label]  │
+│                                                 │
+│  … type-specific params …                       │
+│                                                 │
+│  [required] [unique] [indexed] [localized] [hidden]  ← toggle chips
+│                                                 │
+│  Default          Console view                  │
+│  [________]       [normal ▾]                    │
+│                                                 │
+│  Control*         Form group        Start collapsed│
+│  [default ▾]      [________]        [no ▾]      │
+└─────────────────────────────────────────────────┘
+```
+
+- Header shows `#n` (order), the **type select**, and move-up / move-down / remove.
+- **Changing type cleans the card**: invalid type-specific keys are cleared
+  (`format` always; `currency` kept only if new type is `currency`;
+  `customCurrency` idem; `control` stripped when no longer allowed).
+
+### Common fields (every card)
+
+| Control | Placeholder / options | Notes |
+| ------- | --------------------- | ----- |
+| Name | `snake_case` | Becomes the column name |
+| Label | derived from name | Human title |
+| Default | type-aware parse | JSON if parseable, else string |
+| Console view | `normal` \| `side` \| `header` \| `footer` | Form slot |
+| Control | `Default` + allowed values | Only for boolean/enum/relation |
+| Form group | free text | Collapsible section name |
+| Start collapsed | `no` / `yes` | `groupOpen === false` ↔ yes |
+
+### Toggle chips
+
+Pressable chips — `required`, `unique`, `indexed`, `localized`, `hidden`.
+They map 1:1 to the boolean properties of the same names.
+
+### Type-specific parameter grids
+
+| Type | Extra inputs in the card |
+| ---- | ------------------------ |
+| `number` | Min · Max (`step="any"`) |
+| `string` `text` `slug` `email` `url` | Min length · Max length |
+| `enum` | Values *(comma-separated → array)* |
+| `relation` | Target collection · Target field · Kind · On delete (`— none —` default) |
+| `currency` | ISO code (max 3, uppercase) + live preview `formatCurrencyDisplay(250000, { code, locale: 'id' })` |
+| `custom_currency` | Symbol · Position · Prefix · Suffix · Decimals · Space · Separators · Grouping · Negative pattern + live preview |
+| `richtext` | Rich-text format (`lexical` default) |
+| `media` `document` `attachment` `boolean` `date` `datetime` `json` `id` | *(no type-specific grid — common fields + toggles only)* |
+
+Relation defaults: target field prefilled `id`, kind `belongsTo`; changing kind
+resets an invalid `control`.
+
+---
+
+## RecordForm — filling a record
+
+Opened from **CollectionPage → New / Edit**. Layout:
+
+```
+┌──────────────────────────────┬─────────────────────┐
+│  [header slot]               │  [side slot]        │
+│  ─────────────────────────   │  notes, flags…      │
+│  [normal slots]              │                     │
+│   ▸ Publishing (group)       │  ─────────────────  │
+│   ▸ SEO (group)              │  Details            │
+│  ─────────────────────────   │  pk / created /     │
+│  [footer slot]               │  updated            │
+│                              │                     │
+│                              │  [Save] [Cancel]    │
+│                              │  [Delete]           │
+└──────────────────────────────┴─────────────────────┘
+```
+
+- Main card ≈ flexible width; sidebar ≈ 230px (stacks full-width ≤900px).
+- Fields with `type: 'id'` or `hidden: true` are **not rendered**.
+- Grouping: fields appear in first-seen order; ungrouped fields interleave
+  between group blocks. Each group is a **Collapsible** (`defaultOpen =
+  groupOpen ?? true`).
+- Create defaults: field `default` → boolean `false` → localized object per
+  language → `''`. Empty string + not required → `null` on submit.
+
+### Widget matrix (what the admin actually sees)
+
+| Type / control | Widget |
+| -------------- | ------ |
+| `string` / `email` / `url` / `id` | text / email / url input |
+| `slug` | text input + auto-normalize + help |
+| `text` / `json` | textarea (json pretty-printed) |
+| `number` | number input |
+| `currency` / `custom_currency` | money input |
+| `boolean` default | checkbox |
+| `boolean` `toggle` | switch |
+| `boolean` `radio` | none/Yes/No radios |
+| `date` | date input |
+| `datetime` | datetime-local input |
+| `enum` default | native select "— pick one —" |
+| `enum` `search` | SearchSelect |
+| `enum` `radio` / `checklist` / `multichecklist` | matching choice widgets |
+| `relation` default | chips + inline search + dropdown |
+| `relation` `search` / `radio` / `checklist` / `multichecklist` | matching widgets |
+| `richtext` `lexical` | LexicalEditor + toolbar |
+| `richtext` `markdown`/`mdx` | Markdown write/preview |
+| `media` | thumbnail + media picker |
+| `document` / `attachment` | file tile + file picker |
+
+### Localized fields
+
+When `localized: true` and the project declares languages:
+
+- Label gains italic *localized*
+- Input becomes a **language tab strip** (`LocalizedInput`)
+- Each tab shows the editor for that field type (textarea / markdown / lexical / text)
+- Preview helper renders `en: value | id: value`
+
+### Relation chips — empty / error states
+
+| State | Message |
+| ----- | ------- |
+| Loading options | spinner / loading |
+| Fetch failed | "Failed to load references" |
+| Target collection missing | "Target collection … is not registered" |
+| No rows | "No records in '…' yet" |
+
+### Media / file widgets
+
+| Widget | Visual |
+| ------ | ------ |
+| MediaFieldInput | 56×56 thumbnail (crop from `focusX`/`focusY`), alt + pixel size, Choose / Replace / Remove |
+| FileFieldInput | 44×48 icon tile, `name` + `mime · size`, Choose / Replace / Remove |
+
+### Submit validation
+
+1. `json` fields parsed — failure → *"not valid JSON"*
+2. Empty + not required → `null`
+3. `buildEntitySchema` (Zod) validates the whole payload
+4. Errors surface on the form; successful save invalidates queries
+
+---
+
+## Table view — how fields render as columns
+
+**CollectionPage → records table** (`Table.tsx`).
+
+| Type | Cell rendering |
+| ---- | -------------- |
+| `boolean` | true/false indicator |
+| `enum` | value text (multichecklist enum skipped in filters) |
+| `relation` | resolved label |
+| `date` / `datetime` | formatted |
+| `number` / `currency` / `custom_currency` | formatted numeric / money |
+| `json` | compact preview |
+| `richtext` | plain-text extract |
+| `media` | thumbnail |
+| `document` / `attachment` | file indicator |
+
+Table features:
+
+- Column visibility picker (`console-cols` in localStorage)
+- Resizable columns (`console-colw`)
+- Group-by (`console-groupby`)
+- Sort + page size (`console-sort`, `console-page-size`)
+- Header group runs from field `group` values
+- Search box → strict server-side `search` param
+
+---
+
+## Read-only definition view
+
+**Collection → Definition** card (`CollectionDefinition.tsx`):
+
+| Block | Contents |
+| ----- | -------- |
+| Properties | Name, Label, Description, Group, Icon, Primary key, Timestamps, Soft delete, Fields count |
+| Structure table | Field · Type · Flags · Config |
+
+Flags chips: `required` · `unique` · `indexed` · `localized` · `hidden` ·
+non-normal `consoleView` · `group:…` · `format:…`
+
+Config column examples:
+
+- `→ categories.id` (relation)
+- `kind: hasMany`
+- `onDelete: setNull`
+- `draft | live` (enum values)
+- `0–100` / `1–160` (ranges)
+- `default false`
+
+---
+
+## Starter field set (new collection)
+
+When you create a collection in the console, FieldEditor starts with a starter
+list you can edit:
+
+| Field | Type | Notable settings |
+| ----- | ---- | ---------------- |
+| `title` | string | required, `consoleView: 'header'` |
+| `slug` | slug | unique |
+| `body` | text | |
+| `notes` | text | `consoleView: 'side'` |
+| `published` | boolean | |
+| `view_count` | number | |
+| `author_id` | relation | |
+| `tags` | json | `consoleView: 'footer'` |
+
+---
+
+## Common admin mistakes
+
+| Mistake | What happens |
+| ------- | ------------ |
+| Typo in property name | Strict schema → 400 on save (not silently ignored) |
+| `control` on a string field | Rejected — only boolean/enum/relation |
+| `format` on non-richtext | Rejected |
+| Expecting `PUT` to rename a column | It only **adds** columns |
+| `hidden` field expected in a panel | Panels cannot reference hidden fields |
+| `required` + `default` expecting mandatory write | Write-time is optional by design |
+| Multichecklist enum in table filters | Column filter skips it |
+
+## See also
+
+- [Parameters](/fields/parameters/)
+- [Field Types](/fields/types/)
+- [Building Collections](/console/collection-editor/)
